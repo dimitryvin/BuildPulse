@@ -53,8 +53,8 @@ struct MenuBarView: View {
 
             // Footer
             HStack {
-                Button("Settings...") {
-                    store.send(.settingsButtonTapped)
+                SettingsLink {
+                    Text("Settings...")
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)

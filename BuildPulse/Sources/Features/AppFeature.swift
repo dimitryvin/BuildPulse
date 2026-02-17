@@ -25,6 +25,7 @@ struct AppFeature {
         var derivedDataSelection: Set<String> = []
 
         // Internal tracking
+        var hasAppeared = false
         var hasRunAutoCleanup = false
 
         // Settings via @Shared (UserDefaults-backed)
@@ -121,7 +122,6 @@ struct AppFeature {
         case alert(PresentationAction<Alert>)
 
         // Settings
-        case settingsButtonTapped
         case quitButtonTapped
 
         @CasePathable
@@ -153,6 +153,8 @@ struct AppFeature {
             // MARK: Lifecycle
 
             case .onAppear:
+                guard !state.hasAppeared else { return .none }
+                state.hasAppeared = true
                 return .merge(
                     // Subscribe to build events
                     .run { send in
@@ -393,10 +395,6 @@ struct AppFeature {
                 return .none
 
             // MARK: Settings
-
-            case .settingsButtonTapped:
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                return .none
 
             case .quitButtonTapped:
                 NSApplication.shared.terminate(nil)
