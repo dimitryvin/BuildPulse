@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -184,7 +184,6 @@
 			packageReferences = (
 				51FDD24C64E045E70DAEA74B /* XCRemoteSwiftPackageReference "swift-composable-architecture" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -222,14 +221,17 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = GFUCLJHK34;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = BuildPulse/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				LSUIElement = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimapulse.BuildPulse;
 				PRODUCT_NAME = BuildPulse;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SWIFT_STRICT_CONCURRENCY = complete;
 			};
@@ -239,14 +241,17 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = GFUCLJHK34;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = BuildPulse/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				LSUIElement = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimapulse.BuildPulse;
 				PRODUCT_NAME = BuildPulse;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SWIFT_STRICT_CONCURRENCY = complete;
 			};

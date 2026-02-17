@@ -21,19 +21,18 @@ struct BuildPulseApp: App {
     }
 }
 
-/// Uses TimelineView to force re-render every second during active builds.
-/// MenuBarExtra labels don't reliably react to TCA state observation alone.
+/// Separate view to ensure SwiftUI re-evaluates when TCA state changes.
+/// The timerTicked action updates elapsedSeconds, which changes menuBarTitle,
+/// which triggers SwiftUI to re-render this view.
 struct MenuBarLabel: View {
     let store: StoreOf<AppFeature>
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let title = store.menuBarTitle
-            if title.isEmpty {
-                Label("BuildPulse", systemImage: "hammer.fill")
-            } else {
-                Label(title, systemImage: "hammer.fill")
-            }
+        let title = store.menuBarTitle
+        if title.isEmpty {
+            Label("BuildPulse", systemImage: "hammer.fill")
+        } else {
+            Label(title, systemImage: "hammer.fill")
         }
     }
 }

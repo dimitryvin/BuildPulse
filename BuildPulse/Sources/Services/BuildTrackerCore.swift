@@ -97,18 +97,17 @@ final class BuildTrackerCore: @unchecked Sendable {
         guard !wasBuilding && !cooldownActive else { return }
 
         // Check for swift-frontend processes that are actually building (not indexing).
-        // Build processes use "Intermediates.noindex", indexing uses "Index.noindex".
+        // Build processes write to "Intermediates.noindex", indexing writes to "Index.noindex".
+        // Use ps + grep instead of pgrep -lf to avoid regex issues with long args.
         let pipe = Pipe()
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-lf", "swift-frontend.*Intermediates.noindex"]
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "ps -eo args= | grep swift-frontend | grep Intermediates.noindex | grep -v grep | head -1"]
         process.standardOutput = pipe
         process.standardError = Pipe()
 
         try? process.run()
         process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else { return }
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
