@@ -19,14 +19,12 @@
 		996F78A015D81BB993CAC385 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = D60ABA0EEB805A6C92DBF00D /* ComposableArchitecture */; };
 		ACEAAE3713DDA4AC5F85F123 /* BuildsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79182A99420D3D92FE270E73 /* BuildsTabView.swift */; };
 		BBC82653E358AA3832545333 /* DerivedDataClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D60E547E2130EEE7C0C5540D /* DerivedDataClient.swift */; };
-		D3EE40B59542E7CA4C6DB24A /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08484A8F223B87292C6808EC /* AppState.swift */; };
 		E2A067A72223F3BB23CEF550 /* BuildHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419B155A5F6B4AB5FC263A97 /* BuildHistoryStore.swift */; };
 		E601094A81A9788E95497791 /* OverviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB49F500BA2172DF422862C /* OverviewTabView.swift */; };
 		F9953C40249CF7D105ABD6E2 /* DerivedDataTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233EC148D2F8AA5BCA8370F3 /* DerivedDataTabView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		08484A8F223B87292C6808EC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		0BB49F500BA2172DF422862C /* OverviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewTabView.swift; sourceTree = "<group>"; };
 		21230E56D90DD0C14D7241CB /* BuildTrackerCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildTrackerCore.swift; sourceTree = "<group>"; };
 		233EC148D2F8AA5BCA8370F3 /* DerivedDataTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivedDataTabView.swift; sourceTree = "<group>"; };
@@ -81,7 +79,6 @@
 		78ED3B9C224FD7D560DAAE82 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				08484A8F223B87292C6808EC /* AppState.swift */,
 				67532C8EE7304FFC3593FED6 /* Models.swift */,
 			);
 			path = Models;
@@ -202,7 +199,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				82A645C7A12AB9A3D2037029 /* AppFeature.swift in Sources */,
-				D3EE40B59542E7CA4C6DB24A /* AppState.swift in Sources */,
 				17946B3BBE572E94CA5FEEA9 /* BuildHistoryClient.swift in Sources */,
 				E2A067A72223F3BB23CEF550 /* BuildHistoryStore.swift in Sources */,
 				08CE11EAEAF6ADBAD2C18547 /* BuildMonitorClient.swift in Sources */,
