@@ -353,6 +353,9 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     // MARK: - FSEvents
 
+    /// Debounce DerivedData refresh notifications (don't spam on rapid file changes)
+    private var lastDerivedDataNotification = Date.distantPast
+
     private func startFSEvents() {
         let pathsToWatch = [derivedDataPath] as CFArray
         var context = FSEventStreamContext()
@@ -361,7 +364,16 @@ final class BuildTrackerCore: @unchecked Sendable {
         let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
             guard let info else { return }
             let tracker = Unmanaged<BuildTrackerCore>.fromOpaque(info).takeUnretainedValue()
-            tracker.onDerivedDataChanged?()
+
+            // Immediately check for new build logs (sub-second detection)
+            tracker.checkForNewLogFiles()
+
+            // Debounce DerivedData refresh (every 5s max)
+            let now = Date()
+            if now.timeIntervalSince(tracker.lastDerivedDataNotification) > 5 {
+                tracker.lastDerivedDataNotification = now
+                tracker.onDerivedDataChanged?()
+            }
         }
 
         guard let stream = FSEventStreamCreate(
@@ -370,7 +382,7 @@ final class BuildTrackerCore: @unchecked Sendable {
             &context,
             pathsToWatch,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            5.0,
+            0.5, // Low latency for fast build detection
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
         ) else { return }
 
