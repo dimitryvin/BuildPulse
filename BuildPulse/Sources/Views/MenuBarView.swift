@@ -13,7 +13,8 @@ struct MenuBarView: View {
                 Spacer()
                 if store.isScanning {
                     ProgressView()
-                        .scaleEffect(0.6)
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
                 }
                 Button(action: { store.send(.refreshDerivedData) }) {
                     Image(systemName: "arrow.clockwise")

@@ -19,6 +19,8 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     // Log-based tracking (Xcode IDE builds)
     private var knownLogFiles: Set<String> = []
+    /// 0-byte logs we've seen (build started but not finished) -> (projectName, startTime)
+    private var pendingBuilds: [String: (project: String, startTime: Date)] = [:]
     private var hasScannedInitialLogs = false
 
     private let derivedDataPath: String = {
@@ -63,6 +65,12 @@ final class BuildTrackerCore: @unchecked Sendable {
             }
         }
         hasScannedInitialLogs = true
+    }
+
+    private func fileSize(at path: String) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? UInt64 else { return 0 }
+        return size
     }
 
     // MARK: - Polling on background queue
@@ -137,32 +145,50 @@ final class BuildTrackerCore: @unchecked Sendable {
             let logsDir = dir.appendingPathComponent("Logs/Build")
             guard let logFiles = try? fm.contentsOfDirectory(
                 at: logsDir,
-                includingPropertiesForKeys: [.fileSizeKey]
+                includingPropertiesForKeys: nil
             ) else { continue }
 
             for logFile in logFiles where logFile.pathExtension == "xcactivitylog" {
                 let path = logFile.path
-
-                // Skip empty log files (Xcode creates them before writing)
-                if let attrs = try? fm.attributesOfItem(atPath: path),
-                   let fileSize = attrs[.size] as? Int64,
-                   fileSize == 0 {
-                    continue
-                }
+                let size = fileSize(at: path)
 
                 lock.lock()
-                let isNew = !knownLogFiles.contains(path)
-                if isNew {
-                    knownLogFiles.insert(path)
-                }
+                let isKnown = knownLogFiles.contains(path)
+                let isPending = pendingBuilds[path] != nil
                 let hasCLIBuild = activeCLIBuildProject != nil
                 lock.unlock()
 
-                if isNew && !hasCLIBuild {
+                if hasCLIBuild { continue }
+
+                if !isKnown && size == 0 && !isPending {
+                    // New empty log file = build just started
                     let projectName = extractProjectName(from: dir.lastPathComponent)
-                    // Use file timestamps for duration, don't block on decompression
+                    lock.lock()
+                    pendingBuilds[path] = (project: projectName, startTime: Date())
+                    lock.unlock()
+                    onBuildStarted?(projectName)
+
+                } else if isPending && size > 0 {
+                    // Pending build's log now has content = build finished
+                    lock.lock()
+                    let buildInfo = pendingBuilds.removeValue(forKey: path)
+                    knownLogFiles.insert(path)
+                    lock.unlock()
+
+                    if let info = buildInfo {
+                        let duration = Date().timeIntervalSince(info.startTime)
+                        let succeeded = quickCheckBuildResult(at: logFile)
+                        onBuildFinished?(info.project, max(duration, 1), succeeded)
+                    }
+
+                } else if !isKnown && size > 0 {
+                    // Non-empty log we haven't seen (missed the start)
+                    lock.lock()
+                    knownLogFiles.insert(path)
+                    lock.unlock()
+
+                    let projectName = extractProjectName(from: dir.lastPathComponent)
                     let duration = buildDuration(from: logFile)
-                    // Parse success/failure asynchronously - default to true
                     let succeeded = quickCheckBuildResult(at: logFile)
                     onBuildFinished?(projectName, duration, succeeded)
                 }
