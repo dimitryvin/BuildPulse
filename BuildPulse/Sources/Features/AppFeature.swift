@@ -104,7 +104,8 @@ struct AppFeature {
 
         // Derived data
         case refreshDerivedData
-        case derivedDataScanned([DerivedDataProject], Int64)
+        case derivedDataUpdated([DerivedDataProject], Int64)
+        case derivedDataScanFinished([DerivedDataProject], Int64)
 
         // Persistence
         case buildRecordsLoaded([BuildRecord])
@@ -247,11 +248,24 @@ struct AppFeature {
             case .refreshDerivedData:
                 state.isScanning = true
                 return .run { send in
-                    let (projects, total) = await derivedDataClient.scan()
-                    await send(.derivedDataScanned(projects, total))
+                    let stream = await derivedDataClient.scanIncremental()
+                    var lastProjects: [DerivedDataProject] = []
+                    var lastTotal: Int64 = 0
+                    for await (projects, total) in stream {
+                        lastProjects = projects
+                        lastTotal = total
+                        await send(.derivedDataUpdated(projects, total))
+                    }
+                    await send(.derivedDataScanFinished(lastProjects, lastTotal))
                 }
 
-            case let .derivedDataScanned(projects, total):
+            case let .derivedDataUpdated(projects, total):
+                // Progressive update — just refresh the UI, no side effects
+                state.derivedDataProjects = projects
+                state.totalDerivedDataSize = total
+                return .none
+
+            case let .derivedDataScanFinished(projects, total):
                 state.isScanning = false
                 state.derivedDataProjects = projects
                 state.totalDerivedDataSize = total
