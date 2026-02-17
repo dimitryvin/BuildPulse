@@ -1,11 +1,21 @@
 import Foundation
 import CoreServices
+import Compression
+import os.log
 
-/// Monitors Xcode builds by watching xcactivitylog files in DerivedData.
-/// - Build detected when new non-empty .xcactivitylog appears
-/// - FSEvents provides near-instant notification (0.5s latency)
-/// - Polling every 5s as fallback
-/// Works for both Xcode IDE and CLI xcodebuild invocations.
+/// Monitors Xcode builds using two complementary signals:
+///
+/// **Start detection**: `build.db` modification date advances → build started.
+/// Xcode writes to build.db at the beginning of a build (planning phase).
+///
+/// **End detection**: New `.xcactivitylog` file appears → build finished.
+/// Xcode writes the log at the very end of the build. This is ground truth.
+///
+/// **Canceled builds**: If no xcactivitylog appears and build.db hasn't changed
+/// for 30 seconds, the build is assumed canceled.
+///
+/// Build result: decompress the xcactivitylog (gzip) and search for failure strings.
+/// Duration: wallclock from build.db change to xcactivitylog appearance.
 final class BuildTrackerCore: @unchecked Sendable {
     var onBuildStarted: (@Sendable (String) -> Void)?
     var onBuildFinished: (@Sendable (String, TimeInterval, Bool) -> Void)?
@@ -13,28 +23,56 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     private var eventStream: FSEventStreamRef?
     private var pollTimer: DispatchSourceTimer?
+    private var completionTimer: DispatchSourceTimer?
     private let lock = NSLock()
     private let pollQueue = DispatchQueue(label: "com.dimapulse.buildtracker", qos: .utility)
+    private let log = Logger(subsystem: "com.dimapulse.BuildPulse", category: "BuildTracker")
 
-    // Log-based tracking
-    private var knownLogFiles: Set<String> = []
-    private var hasScannedInitialLogs = false
+    private struct ProjectBuildState {
+        let projectName: String
+        let buildDBPath: String
+        let projectDir: URL
+        var lastModDate: Date
+        var phase: Phase
+        var buildStartTime: Date?
+        var lastActivityDate: Date?
+        var knownLogFiles: Set<String>
+
+        enum Phase: CustomStringConvertible {
+            case idle, building
+            var description: String {
+                switch self {
+                case .idle: return "idle"
+                case .building: return "building"
+                }
+            }
+        }
+    }
+
+    private var projectStates: [String: ProjectBuildState] = [:]
 
     private let derivedDataPath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Developer/Xcode/DerivedData"
     }()
 
+    /// How long to wait with no activity before declaring a canceled build.
+    private static let cancelTimeout: TimeInterval = 30.0
+
     func startMonitoring() {
-        scanExistingLogFiles()
+        log.info("Starting build monitoring at \(self.derivedDataPath)")
+        initializeProjectStates()
         startFSEvents()
         startPolling()
+        startCompletionChecker()
     }
 
     func stopMonitoring() {
+        log.info("Stopping build monitoring")
         pollTimer?.cancel()
         pollTimer = nil
-
+        completionTimer?.cancel()
+        completionTimer = nil
         if let stream = eventStream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
@@ -43,115 +81,359 @@ final class BuildTrackerCore: @unchecked Sendable {
         }
     }
 
-    // MARK: - Initial Snapshot
+    // MARK: - Initial State
 
-    private func scanExistingLogFiles() {
+    private func initializeProjectStates() {
         let fm = FileManager.default
         let ddURL = URL(fileURLWithPath: derivedDataPath)
         guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ddURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: .skipsHiddenFiles
-        ) else { return }
+            at: ddURL, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles
+        ) else {
+            log.warning("Could not list DerivedData directory")
+            return
+        }
+
+        log.info("Found \(projectDirs.count) directories in DerivedData")
+
+        lock.lock()
+        defer { lock.unlock() }
 
         for dir in projectDirs {
-            let logsDir = dir.appendingPathComponent("Logs/Build")
-            guard let logFiles = try? fm.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil) else { continue }
-            for logFile in logFiles where logFile.pathExtension == "xcactivitylog" {
-                knownLogFiles.insert(logFile.path)
+            let dirName = dir.lastPathComponent
+            let buildDBPath = dir.appendingPathComponent(
+                "Build/Intermediates.noindex/XCBuildData/build.db"
+            ).path
+
+            guard fm.fileExists(atPath: buildDBPath) else {
+                log.debug("No build.db for \(dirName)")
+                continue
             }
+            guard let modDate = latestBuildDBModDate(at: buildDBPath) else {
+                log.warning("Could not stat build.db for \(dirName)")
+                continue
+            }
+
+            let logFiles = snapshotLogFiles(in: dir)
+            log.info("Tracking \(dirName): build.db modDate=\(modDate), \(logFiles.count) existing logs")
+
+            projectStates[dirName] = ProjectBuildState(
+                projectName: extractProjectName(from: dirName),
+                buildDBPath: buildDBPath,
+                projectDir: dir,
+                lastModDate: modDate,
+                phase: .idle,
+                knownLogFiles: logFiles
+            )
         }
-        hasScannedInitialLogs = true
+
+        log.info("Initialized \(self.projectStates.count) project states")
     }
 
-    // MARK: - Polling (fallback, FSEvents is primary)
+    // MARK: - Build Start Detection (build.db monitoring)
 
-    private func startPolling() {
+    func checkBuildDatabases() {
+        let fm = FileManager.default
+        let ddURL = URL(fileURLWithPath: derivedDataPath)
+        guard let projectDirs = try? fm.contentsOfDirectory(
+            at: ddURL, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles
+        ) else { return }
+
+        let now = Date()
+        var startedProjects: [String] = []
+
+        lock.lock()
+
+        for dir in projectDirs {
+            let dirName = dir.lastPathComponent
+            let buildDBPath = dir.appendingPathComponent(
+                "Build/Intermediates.noindex/XCBuildData/build.db"
+            ).path
+
+            guard fm.fileExists(atPath: buildDBPath),
+                  let modDate = latestBuildDBModDate(at: buildDBPath) else { continue }
+
+            if var state = projectStates[dirName] {
+                if modDate > state.lastModDate {
+                    state.lastModDate = modDate
+                    state.lastActivityDate = now
+
+                    switch state.phase {
+                    case .idle:
+                        state.phase = .building
+                        state.buildStartTime = now
+                        state.knownLogFiles = snapshotLogFiles(in: dir)
+                        projectStates[dirName] = state
+                        startedProjects.append(state.projectName)
+                        log.info("[\(state.projectName)] BUILD STARTED — build.db modified: \(modDate) (snapshotted \(state.knownLogFiles.count) existing logs)")
+
+                    case .building:
+                        // build.db changed again during build (e.g., end-of-build write)
+                        projectStates[dirName] = state
+                        log.info("[\(state.projectName)] build.db updated during build: \(modDate)")
+                    }
+                }
+            } else {
+                let projectName = extractProjectName(from: dirName)
+                let logFiles = snapshotLogFiles(in: dir)
+                projectStates[dirName] = ProjectBuildState(
+                    projectName: projectName,
+                    buildDBPath: buildDBPath,
+                    projectDir: dir,
+                    lastModDate: modDate,
+                    phase: .idle,
+                    knownLogFiles: logFiles
+                )
+                log.info("Discovered new project: \(projectName) (modDate: \(modDate), \(logFiles.count) logs)")
+            }
+        }
+
+        lock.unlock()
+
+        for project in startedProjects {
+            log.info("Firing onBuildStarted for \(project)")
+            onBuildStarted?(project)
+        }
+    }
+
+    // MARK: - Build Completion Detection (xcactivitylog polling)
+
+    private func startCompletionChecker() {
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
-        timer.schedule(deadline: .now() + 3, repeating: 5.0)
+        timer.schedule(deadline: .now() + 1, repeating: 1.0)
         timer.setEventHandler { [weak self] in
-            self?.checkForNewLogFiles()
+            self?.checkBuildCompletion()
         }
         timer.resume()
-        pollTimer = timer
+        completionTimer = timer
     }
 
-    // MARK: - Log File Detection
+    private func checkBuildCompletion() {
+        let now = Date()
 
-    func checkForNewLogFiles() {
-        guard hasScannedInitialLogs else { return }
-        let fm = FileManager.default
-        let ddURL = URL(fileURLWithPath: derivedDataPath)
+        struct FinishedBuild {
+            let projectName: String
+            let duration: TimeInterval
+            let projectDir: URL
+            let knownLogs: Set<String>
+            let newLogURL: URL?
+        }
+        var finishedBuilds: [FinishedBuild] = []
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ddURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: .skipsHiddenFiles
-        ) else { return }
+        lock.lock()
 
-        for dir in projectDirs {
-            let logsDir = dir.appendingPathComponent("Logs/Build")
-            guard let logFiles = try? fm.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil) else { continue }
+        for (dirName, var state) in projectStates {
+            guard state.phase == .building else { continue }
 
-            for logFile in logFiles where logFile.pathExtension == "xcactivitylog" {
-                let path = logFile.path
+            // Check for new xcactivitylog files
+            let currentLogs = snapshotLogFiles(in: state.projectDir)
+            let newLogs = currentLogs.subtracting(state.knownLogFiles)
 
-                lock.lock()
-                let isKnown = knownLogFiles.contains(path)
-                lock.unlock()
+            if !newLogs.isEmpty {
+                // New xcactivitylog appeared — build finished!
+                // Find the newest one by modification date
+                let fm = FileManager.default
+                let newestLogURL = newLogs
+                    .compactMap { path -> (URL, Date)? in
+                        let url = URL(fileURLWithPath: path)
+                        guard let attrs = try? fm.attributesOfItem(atPath: path),
+                              let modDate = attrs[.modificationDate] as? Date else { return nil }
+                        // Skip empty files (log still being written)
+                        let size = (attrs[.size] as? UInt64) ?? 0
+                        guard size > 0 else { return nil }
+                        return (url, modDate)
+                    }
+                    .max(by: { $0.1 < $1.1 })
 
-                guard !isKnown else { continue }
+                if let (logURL, logDate) = newestLogURL {
+                    let duration = max(logDate.timeIntervalSince(state.buildStartTime ?? now), 1)
+                    log.info("[\(state.projectName)] xcactivitylog appeared: \(logURL.lastPathComponent), logDate=\(logDate), duration=\(String(format: "%.1f", duration))s")
 
-                guard let attrs = try? fm.attributesOfItem(atPath: path) else { continue }
-                let size = (attrs[.size] as? UInt64) ?? 0
+                    finishedBuilds.append(FinishedBuild(
+                        projectName: state.projectName,
+                        duration: duration,
+                        projectDir: state.projectDir,
+                        knownLogs: state.knownLogFiles,
+                        newLogURL: logURL
+                    ))
 
-                // Skip empty files (build not finished yet)
-                guard size > 0 else { continue }
-
-                lock.lock()
-                knownLogFiles.insert(path)
-                lock.unlock()
-
-                let projectName = extractProjectName(from: dir.lastPathComponent)
-                let succeeded = quickCheckBuildResult(at: logFile)
-                let duration = buildDuration(from: attrs)
-
-                // Fire both start + finish so the build is recorded
-                onBuildStarted?(projectName)
-                onBuildFinished?(projectName, max(duration, 1), succeeded)
+                    state.phase = .idle
+                    state.buildStartTime = nil
+                    state.lastActivityDate = nil
+                    state.knownLogFiles = currentLogs
+                    projectStates[dirName] = state
+                } else {
+                    // New log files exist but are empty (still being written) — keep waiting
+                    log.debug("[\(state.projectName)] new log files found but empty, waiting...")
+                }
+                continue
             }
+
+            // Also refresh build.db mod date to track activity
+            if let modDate = latestBuildDBModDate(at: state.buildDBPath),
+               modDate > state.lastModDate {
+                state.lastModDate = modDate
+                state.lastActivityDate = now
+                projectStates[dirName] = state
+                log.info("[\(state.projectName)] build.db activity detected during completion check: \(modDate)")
+                continue
+            }
+
+            // Fallback: cancel timeout
+            let lastActivity = state.lastActivityDate ?? state.buildStartTime ?? now
+            let inactiveTime = now.timeIntervalSince(lastActivity)
+            if inactiveTime >= Self.cancelTimeout {
+                let duration = max(now.timeIntervalSince(state.buildStartTime ?? now), 1)
+                log.info("[\(state.projectName)] CANCEL TIMEOUT — no xcactivitylog and no activity for \(String(format: "%.0f", inactiveTime))s")
+
+                finishedBuilds.append(FinishedBuild(
+                    projectName: state.projectName,
+                    duration: duration,
+                    projectDir: state.projectDir,
+                    knownLogs: state.knownLogFiles,
+                    newLogURL: nil
+                ))
+
+                state.phase = .idle
+                state.buildStartTime = nil
+                state.lastActivityDate = nil
+                projectStates[dirName] = state
+            }
+        }
+
+        lock.unlock()
+
+        for build in finishedBuilds {
+            let succeeded: Bool
+            if let logURL = build.newLogURL {
+                succeeded = checkBuildSucceeded(logURL: logURL)
+            } else {
+                succeeded = false // Canceled / timed out
+            }
+            log.info("[\(build.projectName)] BUILD FINISHED — duration=\(String(format: "%.1f", build.duration))s, succeeded=\(succeeded)")
+            onBuildFinished?(build.projectName, build.duration, succeeded)
         }
     }
 
-    // MARK: - Build Result
+    // MARK: - Build Result Detection
 
-    private func quickCheckBuildResult(at url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return true }
-        defer { try? handle.close() }
-
-        let fileSize = handle.seekToEndOfFile()
-        if fileSize == 0 { return true }
-        let readSize: UInt64 = min(fileSize, 4096)
-        handle.seek(toFileOffset: fileSize - readSize)
-        let tailData = handle.readData(ofLength: Int(readSize))
-
-        if let text = String(data: tailData, encoding: .isoLatin1) {
-            if text.contains("Build Failed") || text.contains("BUILD FAILED") {
-                return false
-            }
+    private func checkBuildSucceeded(logURL: URL) -> Bool {
+        guard let compressedData = try? Data(contentsOf: logURL) else {
+            log.warning("Could not read xcactivitylog at \(logURL.lastPathComponent)")
+            return true
         }
+        log.info("xcactivitylog size: \(compressedData.count) bytes")
+
+        guard compressedData.count > 18 else {
+            log.warning("xcactivitylog too small (\(compressedData.count) bytes), assuming success")
+            return true
+        }
+
+        let headerBytes = compressedData.prefix(10).map { String(format: "%02x", $0) }.joined(separator: " ")
+        log.info("Header bytes: \(headerBytes)")
+
+        let headerSize = gzipHeaderSize(of: compressedData)
+        guard headerSize > 0, headerSize < compressedData.count else {
+            log.warning("Invalid gzip header (headerSize=\(headerSize)), assuming success")
+            return true
+        }
+
+        // Uncompressed size from gzip trailer (last 4 bytes, little-endian, mod 2^32)
+        let c = compressedData.count
+        let sizeHint = Int(compressedData[c-4])
+            | (Int(compressedData[c-3]) << 8)
+            | (Int(compressedData[c-2]) << 16)
+            | (Int(compressedData[c-1]) << 24)
+        let bufferSize = sizeHint > 0
+            ? min(sizeHint, 50_000_000)
+            : min(compressedData.count * 10, 50_000_000)
+        log.info("Decompression: sizeHint=\(sizeHint), bufferSize=\(bufferSize)")
+
+        let destBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { destBuffer.deallocate() }
+
+        let deflateData = compressedData[headerSize...]
+        let decodedSize = deflateData.withUnsafeBytes { rawBuffer -> Int in
+            guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+            else { return 0 }
+            return compression_decode_buffer(
+                destBuffer, bufferSize,
+                base, rawBuffer.count,
+                nil, COMPRESSION_ZLIB
+            )
+        }
+
+        log.info("Decompressed: \(decodedSize) bytes")
+
+        guard decodedSize > 0 else {
+            log.warning("Decompression produced 0 bytes, assuming success")
+            return true
+        }
+
+        let decompressed = Data(bytes: destBuffer, count: decodedSize)
+
+        if let sample = String(data: decompressed.prefix(200), encoding: .utf8) {
+            log.info("Decompressed sample: \(sample)")
+        }
+
+        let hasBuildFailed = decompressed.range(of: Data("Build Failed".utf8)) != nil
+        let hasBUILD_FAILED = decompressed.range(of: Data("BUILD FAILED".utf8)) != nil
+
+        log.info("Failure string search: 'Build Failed'=\(hasBuildFailed), 'BUILD FAILED'=\(hasBUILD_FAILED)")
+
+        if hasBuildFailed || hasBUILD_FAILED { return false }
         return true
+    }
+
+    /// Parse gzip header to find where the raw deflate stream begins.
+    private func gzipHeaderSize(of data: Data) -> Int {
+        guard data.count >= 10,
+              data[0] == 0x1f, data[1] == 0x8b, data[2] == 0x08 else { return 0 }
+
+        let flags = data[3]
+        var offset = 10
+
+        if flags & 0x04 != 0 { // FEXTRA
+            guard data.count > offset + 2 else { return 0 }
+            let extraLen = Int(data[offset]) | (Int(data[offset + 1]) << 8)
+            offset += 2 + extraLen
+        }
+        if flags & 0x08 != 0 { // FNAME
+            while offset < data.count, data[offset] != 0 { offset += 1 }
+            offset += 1
+        }
+        if flags & 0x10 != 0 { // FCOMMENT
+            while offset < data.count, data[offset] != 0 { offset += 1 }
+            offset += 1
+        }
+        if flags & 0x02 != 0 { // FHCRC
+            offset += 2
+        }
+
+        return min(offset, data.count)
     }
 
     // MARK: - Helpers
 
-    private func buildDuration(from attrs: [FileAttributeKey: Any]) -> TimeInterval {
-        if let created = attrs[.creationDate] as? Date,
-           let modified = attrs[.modificationDate] as? Date {
-            let duration = modified.timeIntervalSince(created)
-            if duration > 0 { return duration }
+    /// Returns the latest modification date across build.db and its journal/WAL/SHM files.
+    private func latestBuildDBModDate(at buildDBPath: String) -> Date? {
+        let fm = FileManager.default
+        var latest: Date?
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            guard let attrs = try? fm.attributesOfItem(atPath: buildDBPath + suffix),
+                  let modDate = attrs[.modificationDate] as? Date else { continue }
+            if latest == nil || modDate > latest! {
+                latest = modDate
+            }
         }
-        return 1
+        return latest
+    }
+
+    private func snapshotLogFiles(in projectDir: URL) -> Set<String> {
+        let logsDir = projectDir.appendingPathComponent("Logs/Build")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: logsDir, includingPropertiesForKeys: nil
+        ) else { return [] }
+        return Set(files.filter { $0.pathExtension == "xcactivitylog" }.map(\.path))
     }
 
     private func extractProjectName(from dirName: String) -> String {
@@ -164,6 +446,18 @@ final class BuildTrackerCore: @unchecked Sendable {
         return dirName
     }
 
+    // MARK: - Polling (fallback for FSEvents)
+
+    private func startPolling() {
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
+        timer.schedule(deadline: .now() + 3, repeating: 3.0)
+        timer.setEventHandler { [weak self] in
+            self?.checkBuildDatabases()
+        }
+        timer.resume()
+        pollTimer = timer
+    }
+
     // MARK: - FSEvents
 
     private var lastDerivedDataNotification = Date.distantPast
@@ -173,16 +467,14 @@ final class BuildTrackerCore: @unchecked Sendable {
         var context = FSEventStreamContext()
         context.info = Unmanaged.passUnretained(self).toOpaque()
 
-        let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
             let tracker = Unmanaged<BuildTrackerCore>.fromOpaque(info).takeUnretainedValue()
 
-            // Check for new log files immediately
             tracker.pollQueue.async {
-                tracker.checkForNewLogFiles()
+                tracker.checkBuildDatabases()
             }
 
-            // Debounce DerivedData refresh
             let now = Date()
             if now.timeIntervalSince(tracker.lastDerivedDataNotification) > 5 {
                 tracker.lastDerivedDataNotification = now
@@ -191,18 +483,19 @@ final class BuildTrackerCore: @unchecked Sendable {
         }
 
         guard let stream = FSEventStreamCreate(
-            nil,
-            callback,
-            &context,
-            pathsToWatch,
+            nil, callback, &context, pathsToWatch,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.5,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
-        ) else { return }
+            0.2,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
+        ) else {
+            log.error("Failed to create FSEventStream")
+            return
+        }
 
         let queue = DispatchQueue(label: "com.dimapulse.fsevents", qos: .utility)
         FSEventStreamSetDispatchQueue(stream, queue)
         FSEventStreamStart(stream)
         eventStream = stream
+        log.info("FSEvents stream started")
     }
 }

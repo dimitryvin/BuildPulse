@@ -7,6 +7,11 @@ struct BuildPulseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     let store = Store(initialState: AppFeature.State()) { AppFeature() }
 
+    init() {
+        // Start monitoring immediately at launch, not when the popover first opens
+        store.send(.onAppear)
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(store: store)
