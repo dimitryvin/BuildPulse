@@ -104,8 +104,9 @@ struct AppFeature {
 
         // Derived data
         case refreshDerivedData
-        case derivedDataUpdated([DerivedDataProject], Int64)
-        case derivedDataScanFinished([DerivedDataProject], Int64)
+        case derivedDataListed([DerivedDataProject], Int64, uncachedIndices: [Int])
+        case derivedDataProjectSized(id: String, size: Int64)
+        case derivedDataScanFinished
 
         // Persistence
         case buildRecordsLoaded([BuildRecord])
@@ -248,27 +249,45 @@ struct AppFeature {
             case .refreshDerivedData:
                 state.isScanning = true
                 return .run { send in
-                    let stream = await derivedDataClient.scanIncremental()
-                    var lastProjects: [DerivedDataProject] = []
-                    var lastTotal: Int64 = 0
-                    for await (projects, total) in stream {
-                        lastProjects = projects
-                        lastTotal = total
-                        await send(.derivedDataUpdated(projects, total))
-                    }
-                    await send(.derivedDataScanFinished(lastProjects, lastTotal))
+                    // Phase 1: fast directory listing with cached sizes
+                    let result = await derivedDataClient.listProjects()
+                    await send(.derivedDataListed(result.projects, result.totalSize, uncachedIndices: result.uncachedIndices))
                 }
 
-            case let .derivedDataUpdated(projects, total):
-                // Progressive update — just refresh the UI, no side effects
-                state.derivedDataProjects = projects
-                state.totalDerivedDataSize = total
+            case let .derivedDataListed(projects, totalSize, uncachedIndices):
+                // Show projects immediately (cached have sizes, uncached show 0)
+                state.derivedDataProjects = projects.sorted()
+                state.totalDerivedDataSize = totalSize
+
+                if uncachedIndices.isEmpty {
+                    // Everything was cached, we're done
+                    state.isScanning = false
+                    return .send(.derivedDataScanFinished)
+                }
+
+                // Phase 2: compute uncached sizes one by one
+                let uncachedProjects = uncachedIndices.map { projects[$0] }
+                return .run { send in
+                    for project in uncachedProjects {
+                        let size = await derivedDataClient.computeSize(project)
+                        await send(.derivedDataProjectSized(id: project.id, size: size))
+                    }
+                    await send(.derivedDataScanFinished)
+                }
+
+            case let .derivedDataProjectSized(id, size):
+                // Update single project's size in-place
+                if let index = state.derivedDataProjects.firstIndex(where: { $0.id == id }) {
+                    let old = state.derivedDataProjects[index].sizeBytes
+                    state.derivedDataProjects[index].sizeBytes = size
+                    state.totalDerivedDataSize += (size - old)
+                    // Re-sort since size changed
+                    state.derivedDataProjects.sort()
+                }
                 return .none
 
-            case let .derivedDataScanFinished(projects, total):
+            case .derivedDataScanFinished:
                 state.isScanning = false
-                state.derivedDataProjects = projects
-                state.totalDerivedDataSize = total
 
                 // Auto-cleanup: run once on first scan
                 let autoDeleteDays = state.autoDeleteDays
@@ -281,6 +300,7 @@ struct AppFeature {
                 }
 
                 // Check threshold alert (throttle to once per day)
+                let total = state.totalDerivedDataSize
                 let currentGB = Double(total) / 1_073_741_824.0
                 let threshold = state.alertThresholdGB
                 let shouldAlert: Bool

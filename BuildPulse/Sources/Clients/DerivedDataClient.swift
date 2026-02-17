@@ -5,7 +5,8 @@ import Foundation
 @DependencyClient
 struct DerivedDataClient: Sendable {
     var scan: @Sendable () async -> ([DerivedDataProject], Int64) = { ([], 0) }
-    var scanIncremental: @Sendable () async -> AsyncStream<([DerivedDataProject], Int64)> = { .finished }
+    var listProjects: @Sendable () async -> (projects: [DerivedDataProject], totalSize: Int64, uncachedIndices: [Int]) = { ([], 0, []) }
+    var computeSize: @Sendable (DerivedDataProject) async -> Int64 = { _ in 0 }
     var delete: @Sendable (DerivedDataProject) async -> Void
     var deleteOlderThan: @Sendable (Int) async -> Int = { _ in 0 }
 }
@@ -15,7 +16,8 @@ extension DerivedDataClient: DependencyKey {
         let manager = DerivedDataManager()
         return DerivedDataClient(
             scan: { await manager.scan() },
-            scanIncremental: { await manager.scanIncremental() },
+            listProjects: { await manager.listProjects() },
+            computeSize: { project in await manager.computeSize(for: project) },
             delete: { project in await manager.delete(project: project) },
             deleteOlderThan: { days in await manager.deleteOlderThan(days: days) }
         )

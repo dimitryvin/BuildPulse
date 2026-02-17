@@ -6,12 +6,14 @@ import CoreServices
 final class BuildTrackerCore: @unchecked Sendable {
     var onBuildStarted: (@Sendable (String) -> Void)?
     var onBuildFinished: (@Sendable (String, TimeInterval, Bool) -> Void)?
+    var onDerivedDataChanged: (@Sendable () -> Void)?
 
     private var eventStream: FSEventStreamRef?
-    private var buildCheckTimer: Timer?
+    private var pollTimer: DispatchSourceTimer?
     private let lock = NSLock()
+    private let pollQueue = DispatchQueue(label: "com.dimapulse.buildtracker", qos: .utility)
 
-    // CLI build tracking (xcodebuild processes)
+    // CLI build tracking
     private var activeCLIBuildProject: String?
     private var cliBuildStartTime: Date?
 
@@ -25,23 +27,20 @@ final class BuildTrackerCore: @unchecked Sendable {
     }()
 
     func startMonitoring() {
-        // Snapshot existing log files so we don't fire for old builds
         scanExistingLogFiles()
         startFSEvents()
         startPolling()
     }
 
     func stopMonitoring() {
+        pollTimer?.cancel()
+        pollTimer = nil
+
         if let stream = eventStream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
             eventStream = nil
-        }
-        let timer = buildCheckTimer
-        buildCheckTimer = nil
-        DispatchQueue.main.async {
-            timer?.invalidate()
         }
     }
 
@@ -66,28 +65,24 @@ final class BuildTrackerCore: @unchecked Sendable {
         hasScannedInitialLogs = true
     }
 
-    // MARK: - Polling (for CLI xcodebuild + new log detection)
+    // MARK: - Polling on background queue
 
     private func startPolling() {
-        // Must schedule on main RunLoop so the timer fires
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
-                self?.pollForBuilds()
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            self.buildCheckTimer = timer
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
+        timer.schedule(deadline: .now() + 2, repeating: 3.0)
+        timer.setEventHandler { [weak self] in
+            self?.pollForBuilds()
         }
+        timer.resume()
+        pollTimer = timer
     }
 
     private func pollForBuilds() {
-        // Check for CLI xcodebuild processes
         checkForCLIBuilds()
-        // Check for new log files (catches Xcode IDE builds)
         checkForNewLogFiles()
     }
 
-    // MARK: - CLI Build Detection (xcodebuild processes)
+    // MARK: - CLI Build Detection
 
     private func checkForCLIBuilds() {
         let pipe = Pipe()
@@ -142,23 +137,28 @@ final class BuildTrackerCore: @unchecked Sendable {
             let logsDir = dir.appendingPathComponent("Logs/Build")
             guard let logFiles = try? fm.contentsOfDirectory(
                 at: logsDir,
-                includingPropertiesForKeys: [.contentModificationDateKey]
+                includingPropertiesForKeys: [.fileSizeKey]
             ) else { continue }
 
             for logFile in logFiles where logFile.pathExtension == "xcactivitylog" {
                 let path = logFile.path
+
+                // Skip empty log files (Xcode creates them before writing)
+                if let attrs = try? fm.attributesOfItem(atPath: path),
+                   let fileSize = attrs[.size] as? Int64,
+                   fileSize == 0 {
+                    continue
+                }
 
                 lock.lock()
                 let isNew = !knownLogFiles.contains(path)
                 if isNew {
                     knownLogFiles.insert(path)
                 }
-                // Don't double-count if we're already tracking a CLI build
                 let hasCLIBuild = activeCLIBuildProject != nil
                 lock.unlock()
 
                 if isNew && !hasCLIBuild {
-                    // New log file from Xcode IDE build
                     let projectName = extractProjectName(from: dir.lastPathComponent)
                     let (duration, succeeded) = parseBuildLog(at: logFile)
                     onBuildFinished?(projectName, duration, succeeded)
@@ -198,25 +198,13 @@ final class BuildTrackerCore: @unchecked Sendable {
                 succeeded = true
             }
 
-            // Try to extract duration from log content
+            // Try file timestamps for duration
             var duration: TimeInterval = 0
-            if let fullText = String(data: outputData.suffix(min(outputData.count, 16384)), encoding: .utf8) ?? String(data: outputData.suffix(min(outputData.count, 16384)), encoding: .isoLatin1) {
-                // Look for timing pattern like "Build duration: X.Xs" or total time
-                if let range = fullText.range(of: #"(\d+\.?\d*)\s*seconds?"#, options: .regularExpression, range: fullText.startIndex..<fullText.endIndex) {
-                    let match = fullText[range]
-                    let numStr = match.replacingOccurrences(of: " seconds", with: "").replacingOccurrences(of: " second", with: "")
-                    duration = Double(numStr) ?? 0
-                }
-            }
-
-            // Fallback: use file modification time vs creation time
-            if duration == 0 {
-                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                   let created = attrs[.creationDate] as? Date,
-                   let modified = attrs[.modificationDate] as? Date {
-                    duration = modified.timeIntervalSince(created)
-                    if duration < 0 { duration = 0 }
-                }
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let created = attrs[.creationDate] as? Date,
+               let modified = attrs[.modificationDate] as? Date {
+                duration = modified.timeIntervalSince(created)
+                if duration < 0 { duration = 0 }
             }
 
             return (max(duration, 1), succeeded)
@@ -233,7 +221,6 @@ final class BuildTrackerCore: @unchecked Sendable {
         if let dir = projectDir {
             targetDir = dir
         } else {
-            // Find most recently modified project dir
             guard let contents = try? fm.contentsOfDirectory(
                 at: ddPath,
                 includingPropertiesForKeys: [.contentModificationDateKey],
@@ -300,9 +287,7 @@ final class BuildTrackerCore: @unchecked Sendable {
         return dirName
     }
 
-    // MARK: - FSEvents (triggers derived data refresh)
-
-    var onDerivedDataChanged: (@Sendable () -> Void)?
+    // MARK: - FSEvents
 
     private func startFSEvents() {
         let pathsToWatch = [derivedDataPath] as CFArray
@@ -321,7 +306,7 @@ final class BuildTrackerCore: @unchecked Sendable {
             &context,
             pathsToWatch,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            5.0, // 5 second latency for debouncing
+            5.0,
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
         ) else { return }
 
