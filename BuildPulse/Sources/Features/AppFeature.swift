@@ -24,6 +24,9 @@ struct AppFeature {
         var derivedDataSortOrder: SortOrder = .size
         var derivedDataSelection: Set<String> = []
 
+        // Internal tracking
+        var hasRunAutoCleanup = false
+
         // Settings via @Shared (UserDefaults-backed)
         @Shared(.appStorage("alertThresholdGB")) var alertThresholdGB = 50.0
         @Shared(.appStorage("autoDeleteDays")) var autoDeleteDays = 0
@@ -241,14 +244,13 @@ struct AppFeature {
                 state.derivedDataProjects = projects
                 state.totalDerivedDataSize = total
 
-                // Auto-cleanup on scan
+                // Auto-cleanup: run once on first scan
                 let autoDeleteDays = state.autoDeleteDays
-                if autoDeleteDays > 0 {
+                if autoDeleteDays > 0 && !state.hasRunAutoCleanup {
+                    state.hasRunAutoCleanup = true
                     return .run { send in
                         let _ = await derivedDataClient.deleteOlderThan(autoDeleteDays)
-                        // Re-scan after auto-cleanup
-                        let (newProjects, newTotal) = await derivedDataClient.scan()
-                        await send(.derivedDataScanned(newProjects, newTotal))
+                        await send(.refreshDerivedData)
                     }
                 }
 
