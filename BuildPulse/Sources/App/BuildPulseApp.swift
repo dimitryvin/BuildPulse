@@ -1,28 +1,30 @@
+import ComposableArchitecture
 import SwiftUI
 
 @main
 struct BuildPulseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var appState = AppState()
+    let store = Store(initialState: AppFeature.State()) { AppFeature() }
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView()
-                .environmentObject(appState)
+            MenuBarView(store: store)
         } label: {
-            Label(appState.menuBarTitle, systemImage: "hammer.fill")
+            Label(store.menuBarTitle, systemImage: "hammer.fill")
         }
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView()
-                .environmentObject(appState)
+            SettingsView(store: store)
         }
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // No dock icon - menu bar only
+        // Request notification permissions
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 }
+
+import UserNotifications

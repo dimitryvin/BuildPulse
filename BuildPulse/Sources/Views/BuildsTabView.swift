@@ -1,11 +1,11 @@
+import ComposableArchitecture
 import SwiftUI
 
 struct BuildsTabView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selectedRange: TimeRange = .week
+    let store: StoreOf<AppFeature>
 
     var filteredRecords: [BuildRecord] {
-        appState.buildRecords.filter { $0.startTime >= selectedRange.startDate }
+        store.buildRecords.filter { $0.startTime >= store.buildsSelectedRange.startDate }
     }
 
     var dailyBuilds: [(String, Int, TimeInterval)] {
@@ -24,7 +24,10 @@ struct BuildsTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Range", selection: $selectedRange) {
+            Picker("Range", selection: Binding(
+                get: { store.buildsSelectedRange },
+                set: { store.send(.buildsRangeChanged($0)) }
+            )) {
                 ForEach(TimeRange.allCases, id: \.self) { range in
                     Text(range.rawValue).tag(range)
                 }
@@ -32,7 +35,7 @@ struct BuildsTabView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            let stats = appState.statsFor(range: selectedRange)
+            let stats = store.state.statsFor(range: store.buildsSelectedRange)
 
             // Stats summary
             HStack(spacing: 16) {
@@ -74,7 +77,7 @@ struct BuildsTabView: View {
                 }
             }
 
-            if appState.buildRecords.count > 20 {
+            if filteredRecords.count > 20 {
                 Text("Showing 20 of \(filteredRecords.count) builds")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

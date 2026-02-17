@@ -1,63 +1,36 @@
+import ComposableArchitecture
 import SwiftUI
 
 struct DerivedDataTabView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selection = Set<String>()
-    @State private var sortOrder: SortOrder = .size
-    @State private var showConfirmDelete = false
-    @State private var projectToDelete: DerivedDataProject?
-
-    enum SortOrder: String, CaseIterable {
-        case size = "Size"
-        case name = "Name"
-        case modified = "Last Modified"
-    }
-
-    var sortedProjects: [DerivedDataProject] {
-        switch sortOrder {
-        case .size: return appState.derivedDataProjects.sorted { $0.sizeBytes > $1.sizeBytes }
-        case .name: return appState.derivedDataProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        case .modified: return appState.derivedDataProjects.sorted { $0.lastModified > $1.lastModified }
-        }
-    }
+    @Bindable var store: StoreOf<AppFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header with total + actions
             HStack {
                 VStack(alignment: .leading) {
-                    Text("Total: \(ByteCountFormatter.string(fromByteCount: appState.totalDerivedDataSize, countStyle: .file))")
+                    Text("Total: \(ByteCountFormatter.string(fromByteCount: store.totalDerivedDataSize, countStyle: .file))")
                         .font(.headline)
-                    Text("\(appState.derivedDataProjects.count) projects")
+                    Text("\(store.derivedDataProjects.count) projects")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Menu("Clean Up") {
-                    Button("Delete selected (\(selection.count))") {
-                        showConfirmDelete = true
+                    Button("Delete selected (\(store.derivedDataSelection.count))") {
+                        store.send(.deleteSelectedTapped)
                     }
-                    .disabled(selection.isEmpty)
+                    .disabled(store.derivedDataSelection.isEmpty)
                     Divider()
                     Button("Delete older than 7 days") {
-                        Task {
-                            let old = appState.derivedDataProjects.filter {
-                                $0.lastModified < Calendar.current.date(byAdding: .day, value: -7, to: Date())!
-                            }
-                            await appState.deleteProjects(old)
-                        }
+                        store.send(.deleteOlderThan(days: 7))
                     }
                     Button("Delete older than 30 days") {
-                        Task {
-                            let old = appState.derivedDataProjects.filter {
-                                $0.lastModified < Calendar.current.date(byAdding: .day, value: -30, to: Date())!
-                            }
-                            await appState.deleteProjects(old)
-                        }
+                        store.send(.deleteOlderThan(days: 30))
                     }
                     Divider()
                     Button("Delete All", role: .destructive) {
-                        Task { await appState.deleteProjects(appState.derivedDataProjects) }
+                        store.send(.deleteAllTapped)
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -65,55 +38,34 @@ struct DerivedDataTabView: View {
             }
 
             // Sort picker
-            Picker("Sort", selection: $sortOrder) {
-                ForEach(SortOrder.allCases, id: \.self) { order in
+            Picker("Sort", selection: Binding(
+                get: { store.derivedDataSortOrder },
+                set: { store.send(.sortOrderChanged($0)) }
+            )) {
+                ForEach(AppFeature.SortOrder.allCases, id: \.self) { order in
                     Text(order.rawValue).tag(order)
                 }
             }
             .pickerStyle(.segmented)
 
             // Size bar visualization
-            if !appState.derivedDataProjects.isEmpty {
-                SizeBarView(projects: Array(sortedProjects.prefix(8)), total: appState.totalDerivedDataSize)
+            if !store.derivedDataProjects.isEmpty {
+                SizeBarView(projects: Array(store.sortedProjects.prefix(8)), total: store.totalDerivedDataSize)
                     .frame(height: 24)
             }
 
             // Project list
-            ForEach(sortedProjects) { project in
-                ProjectRow(project: project, isSelected: selection.contains(project.id)) {
-                    if selection.contains(project.id) {
-                        selection.remove(project.id)
-                    } else {
-                        selection.insert(project.id)
-                    }
-                } onDelete: {
-                    projectToDelete = project
-                    showConfirmDelete = true
-                }
+            ForEach(store.sortedProjects) { project in
+                ProjectRow(
+                    project: project,
+                    isSelected: store.derivedDataSelection.contains(project.id),
+                    onToggle: { store.send(.toggleProjectSelection(project.id)) },
+                    onDelete: { store.send(.deleteProjectTapped(project)) }
+                )
             }
         }
         .padding(16)
-        .alert("Delete Derived Data?", isPresented: $showConfirmDelete) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
-                Task {
-                    if let project = projectToDelete {
-                        await appState.deleteProject(project)
-                        projectToDelete = nil
-                    } else {
-                        let toDelete = appState.derivedDataProjects.filter { selection.contains($0.id) }
-                        await appState.deleteProjects(toDelete)
-                        selection.removeAll()
-                    }
-                }
-            }
-        } message: {
-            if let project = projectToDelete {
-                Text("Remove \(project.name) (\(project.sizeFormatted))? Xcode will rebuild on next build.")
-            } else {
-                Text("Remove \(selection.count) projects? Xcode will rebuild them on next build.")
-            }
-        }
+        .alert($store.scope(state: \.alert, action: \.alert))
     }
 }
 

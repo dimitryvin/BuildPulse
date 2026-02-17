@@ -1,13 +1,13 @@
+import ComposableArchitecture
 import SwiftUI
 
 struct OverviewTabView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selectedRange: TimeRange = .today
+    let store: StoreOf<AppFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Active build banner
-            if let build = appState.activeBuild {
+            if let build = store.activeBuild {
                 ActiveBuildBanner(build: build)
             }
 
@@ -18,7 +18,7 @@ struct OverviewTabView: View {
                         Text("Derived Data")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(ByteCountFormatter.string(fromByteCount: appState.totalDerivedDataSize, countStyle: .file))
+                        Text(ByteCountFormatter.string(fromByteCount: store.totalDerivedDataSize, countStyle: .file))
                             .font(.title2.bold())
                     }
                     Spacer()
@@ -26,7 +26,7 @@ struct OverviewTabView: View {
                         Text("Projects")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("\(appState.derivedDataProjects.count)")
+                        Text("\(store.derivedDataProjects.count)")
                             .font(.title2.bold())
                     }
                 }
@@ -35,7 +35,10 @@ struct OverviewTabView: View {
             // Build stats
             GroupBox {
                 VStack(alignment: .leading, spacing: 8) {
-                    Picker("Range", selection: $selectedRange) {
+                    Picker("Range", selection: Binding(
+                        get: { store.overviewSelectedRange },
+                        set: { store.send(.overviewRangeChanged($0)) }
+                    )) {
                         ForEach(TimeRange.allCases, id: \.self) { range in
                             Text(range.rawValue).tag(range)
                         }
@@ -43,7 +46,7 @@ struct OverviewTabView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
 
-                    let stats = appState.statsFor(range: selectedRange)
+                    let stats = store.state.statsFor(range: store.overviewSelectedRange)
                     HStack(spacing: 16) {
                         StatCard(title: "Builds", value: "\(stats.totalBuilds)")
                         StatCard(title: "Avg Time", value: stats.avgFormatted)
@@ -54,13 +57,13 @@ struct OverviewTabView: View {
             }
 
             // Recent builds
-            if !appState.buildRecords.isEmpty {
+            if !store.buildRecords.isEmpty {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Recent Builds")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        ForEach(appState.buildRecords.prefix(5)) { record in
+                        ForEach(store.buildRecords.prefix(5)) { record in
                             BuildRecordRow(record: record)
                         }
                     }
@@ -68,13 +71,13 @@ struct OverviewTabView: View {
             }
 
             // Top projects by size
-            if !appState.derivedDataProjects.isEmpty {
+            if !store.derivedDataProjects.isEmpty {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Largest Projects")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        ForEach(appState.derivedDataProjects.prefix(3)) { project in
+                        ForEach(store.derivedDataProjects.prefix(3)) { project in
                             HStack {
                                 Text(project.name)
                                     .lineLimit(1)
@@ -92,10 +95,10 @@ struct OverviewTabView: View {
     }
 }
 
+// MARK: - Components
+
 struct ActiveBuildBanner: View {
     let build: ActiveBuild
-    @State private var elapsed: TimeInterval = 0
-    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack {
@@ -105,15 +108,12 @@ struct ActiveBuildBanner: View {
             Text("Building \(build.project)")
                 .lineLimit(1)
             Spacer()
-            Text("\(Int(elapsed))s")
+            Text("\(build.elapsedSeconds)s")
                 .monospacedDigit()
                 .foregroundStyle(.orange)
         }
         .padding(8)
         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-        .onReceive(timer) { _ in
-            elapsed = Date().timeIntervalSince(build.startTime)
-        }
     }
 }
 
