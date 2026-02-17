@@ -51,8 +51,10 @@ struct DerivedDataTabView: View {
 
             // Size bar visualization
             if !store.derivedDataProjects.isEmpty {
-                SizeBarView(projects: Array(store.sortedProjects.prefix(8)), total: store.totalDerivedDataSize)
-                    .frame(height: 24)
+                SizeBarView(
+                    projects: Array(store.sortedProjects.sorted { $0.sizeBytes > $1.sizeBytes }.prefix(6)),
+                    total: store.totalDerivedDataSize
+                )
             }
 
             // Project list
@@ -60,6 +62,7 @@ struct DerivedDataTabView: View {
                 ProjectRow(
                     project: project,
                     isSelected: store.derivedDataSelection.contains(project.id),
+                    barColor: SizeBarView.color(for: project, in: store.derivedDataProjects),
                     onToggle: { store.send(.toggleProjectSelection(project.id)) },
                     onDelete: { store.send(.deleteProjectTapped(project)) }
                 )
@@ -119,6 +122,7 @@ struct DeleteConfirmationBanner: View {
 struct ProjectRow: View {
     let project: DerivedDataProject
     let isSelected: Bool
+    let barColor: Color?
     let onToggle: () -> Void
     let onDelete: () -> Void
 
@@ -127,6 +131,12 @@ struct ProjectRow: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isSelected ? .blue : .secondary)
                 .onTapGesture { onToggle() }
+
+            if let barColor {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(barColor)
+                    .frame(width: 3, height: 24)
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.name)
@@ -158,20 +168,34 @@ struct SizeBarView: View {
     let projects: [DerivedDataProject]
     let total: Int64
 
-    private let colors: [Color] = [.blue, .purple, .orange, .green, .pink, .cyan, .yellow, .mint]
+    static let colors: [Color] = [.blue, .purple, .orange, .green, .pink, .cyan, .yellow, .mint]
 
     var body: some View {
         GeometryReader { geo in
-            HStack(spacing: 1) {
+            HStack(spacing: 0.5) {
                 ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
                     let fraction = total > 0 ? CGFloat(project.sizeBytes) / CGFloat(total) : 0
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(colors[index % colors.count])
-                        .frame(width: max(2, geo.size.width * fraction))
-                        .help("\(project.name): \(project.sizeFormatted)")
+                    if fraction > 0 {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Self.colors[index % Self.colors.count])
+                            .frame(width: max(3, (geo.size.width - CGFloat(projects.count) * 0.5) * fraction))
+                    }
                 }
+                // "Other" fills remaining space
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.gray.opacity(0.3))
             }
         }
+        .frame(height: 20)
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    /// Color for a project based on its position in the size-sorted list
+    static func color(for project: DerivedDataProject, in allProjects: [DerivedDataProject]) -> Color? {
+        let sorted = allProjects.sorted { $0.sizeBytes > $1.sizeBytes }
+        guard let index = sorted.prefix(colors.count).firstIndex(where: { $0.id == project.id }) else {
+            return nil
+        }
+        return colors[index]
     }
 }

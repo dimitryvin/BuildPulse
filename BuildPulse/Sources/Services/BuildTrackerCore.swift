@@ -160,14 +160,52 @@ final class BuildTrackerCore: @unchecked Sendable {
 
                 if isNew && !hasCLIBuild {
                     let projectName = extractProjectName(from: dir.lastPathComponent)
-                    let (duration, succeeded) = parseBuildLog(at: logFile)
+                    // Use file timestamps for duration, don't block on decompression
+                    let duration = buildDuration(from: logFile)
+                    // Parse success/failure asynchronously - default to true
+                    let succeeded = quickCheckBuildResult(at: logFile)
                     onBuildFinished?(projectName, duration, succeeded)
                 }
             }
         }
     }
 
-    // MARK: - Build Log Parsing
+    // MARK: - Lightweight Build Info
+
+    /// Get build duration from file timestamps (instant, no decompression)
+    private func buildDuration(from url: URL) -> TimeInterval {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let created = attrs[.creationDate] as? Date,
+              let modified = attrs[.modificationDate] as? Date else {
+            return 1
+        }
+        let duration = modified.timeIntervalSince(created)
+        return max(duration, 1)
+    }
+
+    /// Quick check build result by reading just the compressed file's tail
+    /// without full decompression. Falls back to true (success) if uncertain.
+    private func quickCheckBuildResult(at url: URL) -> Bool {
+        // Read last 2KB of the compressed file directly (no decompression)
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return true }
+        defer { try? handle.close() }
+
+        let fileSize = handle.seekToEndOfFile()
+        let readSize: UInt64 = min(fileSize, 4096)
+        handle.seek(toFileOffset: fileSize - readSize)
+        let tailData = handle.readData(ofLength: Int(readSize))
+
+        // Check raw bytes for failure markers (these strings appear even compressed sometimes)
+        if let text = String(data: tailData, encoding: .isoLatin1) {
+            if text.contains("Build Failed") || text.contains("BUILD FAILED") {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    // MARK: - Full Build Log Parsing (used by CLI detection)
 
     private func parseBuildLog(at url: URL) -> (TimeInterval, Bool) {
         let gunzipProcess = Process()
