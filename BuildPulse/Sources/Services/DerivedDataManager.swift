@@ -1,0 +1,88 @@
+import Foundation
+
+actor DerivedDataManager {
+    private let derivedDataURL: URL = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+    }()
+
+    func scan() -> ([DerivedDataProject], Int64) {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: derivedDataURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return ([], 0)
+        }
+
+        var projects: [DerivedDataProject] = []
+        var totalSize: Int64 = 0
+
+        for url in contents {
+            guard let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey]),
+                  resourceValues.isDirectory == true else { continue }
+
+            let dirName = url.lastPathComponent
+            // DerivedData folders are "ProjectName-hashstring"
+            let projectName = extractProjectName(from: dirName)
+            let size = directorySize(at: url)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+
+            projects.append(DerivedDataProject(
+                id: dirName,
+                name: projectName,
+                path: url,
+                sizeBytes: size,
+                lastModified: modified
+            ))
+            totalSize += size
+        }
+
+        return (projects.sorted(), totalSize)
+    }
+
+    func delete(project: DerivedDataProject) {
+        try? FileManager.default.removeItem(at: project.path)
+    }
+
+    func deleteOlderThan(days: Int) -> Int {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
+        let (projects, _) = scan()
+        var count = 0
+        for project in projects where project.lastModified < cutoff {
+            try? FileManager.default.removeItem(at: project.path)
+            count += 1
+        }
+        return count
+    }
+
+    private func extractProjectName(from dirName: String) -> String {
+        // Format: "ProjectName-abcdefghijklm"
+        if let dashRange = dirName.range(of: "-", options: .backwards) {
+            let suffix = dirName[dashRange.upperBound...]
+            // Hash is typically 20+ hex-like chars
+            if suffix.count >= 12 {
+                return String(dirName[..<dashRange.lowerBound])
+            }
+        }
+        return dirName
+    }
+
+    private func directorySize(at url: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var size: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
+                  resourceValues.isDirectory == false else { continue }
+            size += Int64(resourceValues.fileSize ?? 0)
+        }
+        return size
+    }
+}

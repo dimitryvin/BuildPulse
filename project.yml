@@ -1,0 +1,29 @@
+name: BuildPulse
+options:
+  bundleIdPrefix: com.dimapulse
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  BuildPulse:
+    type: application
+    platform: macOS
+    sources:
+      - BuildPulse/Sources
+    resources:
+      - BuildPulse/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dimapulse.BuildPulse
+        INFOPLIST_FILE: BuildPulse/Resources/Info.plist
+        PRODUCT_NAME: BuildPulse
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+        LSUIElement: true
+        ENABLE_HARDENED_RUNTIME: true
+        CODE_SIGN_IDENTITY: "-"
+        SWIFT_STRICT_CONCURRENCY: complete
