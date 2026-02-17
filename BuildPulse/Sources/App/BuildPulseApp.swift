@@ -21,17 +21,19 @@ struct BuildPulseApp: App {
     }
 }
 
-/// Separate view for the menu bar label to ensure reactive updates.
-/// MenuBarExtra label closures may not re-evaluate with computed properties alone.
+/// Uses TimelineView to force re-render every second during active builds.
+/// MenuBarExtra labels don't reliably react to TCA state observation alone.
 struct MenuBarLabel: View {
     let store: StoreOf<AppFeature>
 
     var body: some View {
-        let title = store.menuBarTitle
-        if title.isEmpty {
-            Label("BuildPulse", systemImage: "hammer.fill")
-        } else {
-            Label(title, systemImage: store.activeBuild != nil ? "hammer.fill" : "hammer.fill")
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let title = store.menuBarTitle
+            if title.isEmpty {
+                Label("BuildPulse", systemImage: "hammer.fill")
+            } else {
+                Label(title, systemImage: "hammer.fill")
+            }
         }
     }
 }

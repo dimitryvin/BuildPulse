@@ -1,8 +1,8 @@
 import Foundation
 import CoreServices
 
-/// Monitors Xcode builds using a hybrid approach:
-/// - Build START: detected via compiler processes (swift-frontend, clang)
+/// Monitors Xcode builds using:
+/// - Build START: detected via DerivedData modification time changes (FSEvents)
 /// - Build END: detected via new .xcactivitylog files appearing
 /// Works for both Xcode IDE and CLI xcodebuild invocations.
 final class BuildTrackerCore: @unchecked Sendable {
@@ -18,6 +18,8 @@ final class BuildTrackerCore: @unchecked Sendable {
     // Active build tracking
     private var activeBuildProject: String?
     private var buildStartTime: Date?
+    /// Cooldown after build finishes to avoid re-triggering from post-build activity
+    private var lastBuildFinished: Date = .distantPast
 
     // Log-based tracking
     private var knownLogFiles: Set<String> = []
@@ -46,7 +48,7 @@ final class BuildTrackerCore: @unchecked Sendable {
         }
     }
 
-    // MARK: - Initial Log Snapshot
+    // MARK: - Initial Snapshots
 
     private func scanExistingLogFiles() {
         let fm = FileManager.default
@@ -71,7 +73,7 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     private func startPolling() {
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
-        timer.schedule(deadline: .now() + 1, repeating: 1.5)
+        timer.schedule(deadline: .now() + 2, repeating: 2.0)
         timer.setEventHandler { [weak self] in
             self?.poll()
         }
@@ -80,49 +82,64 @@ final class BuildTrackerCore: @unchecked Sendable {
     }
 
     private func poll() {
-        lock.lock()
-        let wasBuilding = activeBuildProject != nil
-        lock.unlock()
-
-        // Check for build START via compiler processes
-        if !wasBuilding {
-            let compiling = isCompilerRunning()
-            if compiling {
-                let project = detectActiveProject()
-                lock.lock()
-                activeBuildProject = project
-                buildStartTime = Date()
-                lock.unlock()
-                onBuildStarted?(project)
-            }
-        }
-
-        // Check for build END via new log files
+        checkForBuildStart()
         checkForNewLogFiles()
     }
 
-    // MARK: - Compiler Process Detection (for build START)
+    // MARK: - Build Start Detection (via swift-frontend with build-specific args)
 
-    private func isCompilerRunning() -> Bool {
-        // swift-frontend = Swift compilation (most reliable, Xcode-specific)
-        if processExists("swift-frontend") { return true }
-        // clang = C/ObjC compilation
-        if processExists("clang") { return true }
-        return false
-    }
+    private func checkForBuildStart() {
+        lock.lock()
+        let wasBuilding = activeBuildProject != nil
+        let cooldownActive = Date().timeIntervalSince(lastBuildFinished) < 10
+        lock.unlock()
 
-    private func processExists(_ name: String) -> Bool {
+        guard !wasBuilding && !cooldownActive else { return }
+
+        // Check for swift-frontend processes that are actually building (not indexing).
+        // Build processes use "Intermediates.noindex", indexing uses "Index.noindex".
+        let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", name]
-        process.standardOutput = Pipe()
+        process.arguments = ["-lf", "swift-frontend.*Intermediates.noindex"]
+        process.standardOutput = pipe
         process.standardError = Pipe()
+
         try? process.run()
         process.waitUntilExit()
-        return process.terminationStatus == 0
+
+        guard process.terminationStatus == 0 else { return }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        // Extract project from the DerivedData path in the arguments
+        let project = extractProjectFromCompilerArgs(output)
+        lock.lock()
+        activeBuildProject = project
+        buildStartTime = Date()
+        lock.unlock()
+        onBuildStarted?(project)
     }
 
-    /// Find which project is being built from most recently modified DerivedData dir
+    /// Extract project name from swift-frontend args containing DerivedData path
+    private func extractProjectFromCompilerArgs(_ output: String) -> String {
+        // Look for DerivedData/<ProjectName-hash> in the args
+        let lines = output.components(separatedBy: "\n")
+        for line in lines {
+            if let range = line.range(of: "DerivedData/") {
+                let after = line[range.upperBound...]
+                let dirName = String(after.prefix(while: { $0 != "/" }))
+                if !dirName.isEmpty {
+                    return extractProjectName(from: dirName)
+                }
+            }
+        }
+        return detectActiveProject()
+    }
+
+    /// Fallback: find which project is being built from most recently modified DerivedData dir
     private func detectActiveProject() -> String {
         let fm = FileManager.default
         let ddURL = URL(fileURLWithPath: derivedDataPath)
@@ -147,9 +164,9 @@ final class BuildTrackerCore: @unchecked Sendable {
         return "Xcode Build"
     }
 
-    // MARK: - Log File Detection (for build END + fallback)
+    // MARK: - Log File Detection (for build END)
 
-    private func checkForNewLogFiles() {
+    func checkForNewLogFiles() {
         guard hasScannedInitialLogs else { return }
         let fm = FileManager.default
         let ddURL = URL(fileURLWithPath: derivedDataPath)
@@ -173,7 +190,7 @@ final class BuildTrackerCore: @unchecked Sendable {
 
                 guard !isKnown else { continue }
 
-                // Only process non-empty files (Xcode writes content when build completes)
+                // Only process non-empty files
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
                       let size = attrs[.size] as? UInt64,
                       size > 0 else {
@@ -185,24 +202,21 @@ final class BuildTrackerCore: @unchecked Sendable {
                 let isTracking = activeBuildProject != nil
                 let project = activeBuildProject ?? extractProjectName(from: dir.lastPathComponent)
                 let startTime = buildStartTime
-                // Clear active build
                 activeBuildProject = nil
                 buildStartTime = nil
+                lastBuildFinished = Date()
                 lock.unlock()
 
                 let duration: TimeInterval
                 if let start = startTime {
-                    // We tracked the start via compiler detection - use real elapsed time
                     duration = Date().timeIntervalSince(start)
                 } else {
-                    // Missed the start - estimate from file timestamps
                     duration = buildDuration(from: logFile)
                 }
 
                 let succeeded = quickCheckBuildResult(at: logFile)
 
                 if !isTracking {
-                    // We missed the start, fire both events
                     onBuildStarted?(project)
                 }
                 onBuildFinished?(project, max(duration, 1), succeeded)
@@ -264,8 +278,9 @@ final class BuildTrackerCore: @unchecked Sendable {
             guard let info else { return }
             let tracker = Unmanaged<BuildTrackerCore>.fromOpaque(info).takeUnretainedValue()
 
-            // Immediately check for new log files (fast build-end detection)
+            // Check for build start/end on any filesystem change
             tracker.pollQueue.async {
+                tracker.checkForBuildStart()
                 tracker.checkForNewLogFiles()
             }
 
@@ -283,7 +298,7 @@ final class BuildTrackerCore: @unchecked Sendable {
             &context,
             pathsToWatch,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.5, // Low latency for fast build-end detection
+            0.3, // Very low latency for fast detection
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
         ) else { return }
 
