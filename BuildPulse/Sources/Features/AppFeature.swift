@@ -27,6 +27,7 @@ struct AppFeature {
         // Internal tracking
         var hasAppeared = false
         var hasRunAutoCleanup = false
+        var lastThresholdAlertDate: Date? = nil
 
         // Settings via @Shared (UserDefaults-backed)
         @Shared(.appStorage("alertThresholdGB")) var alertThresholdGB = 50.0
@@ -142,6 +143,7 @@ struct AppFeature {
     private enum CancelID {
         case buildTimer
         case buildMonitor
+        case fsEventsRefresh
     }
 
     // MARK: - Reducer
@@ -163,6 +165,14 @@ struct AppFeature {
                         }
                     }
                     .cancellable(id: CancelID.buildMonitor),
+
+                    // Subscribe to FSEvents-based DerivedData changes
+                    .run { send in
+                        for await _ in buildMonitor.derivedDataChanges() {
+                            await send(.refreshDerivedData)
+                        }
+                    }
+                    .cancellable(id: CancelID.fsEventsRefresh),
 
                     // Load build history
                     .run { send in
@@ -256,10 +266,17 @@ struct AppFeature {
                     }
                 }
 
-                // Check threshold alert
+                // Check threshold alert (throttle to once per day)
                 let currentGB = Double(total) / 1_073_741_824.0
                 let threshold = state.alertThresholdGB
-                if currentGB > threshold && threshold > 0 {
+                let shouldAlert: Bool
+                if let lastAlert = state.lastThresholdAlertDate {
+                    shouldAlert = Date().timeIntervalSince(lastAlert) > 86400 // 24 hours
+                } else {
+                    shouldAlert = true
+                }
+                if currentGB > threshold && threshold > 0 && shouldAlert {
+                    state.lastThresholdAlertDate = Date()
                     return .run { _ in
                         let content = UNMutableNotificationContent()
                         content.title = "DerivedData Alert"
