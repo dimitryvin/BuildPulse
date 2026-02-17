@@ -38,8 +38,11 @@ final class BuildTrackerCore: @unchecked Sendable {
             FSEventStreamRelease(stream)
             eventStream = nil
         }
-        buildCheckTimer?.invalidate()
+        let timer = buildCheckTimer
         buildCheckTimer = nil
+        DispatchQueue.main.async {
+            timer?.invalidate()
+        }
     }
 
     // MARK: - Initial Log Snapshot
@@ -66,8 +69,14 @@ final class BuildTrackerCore: @unchecked Sendable {
     // MARK: - Polling (for CLI xcodebuild + new log detection)
 
     private func startPolling() {
-        buildCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.pollForBuilds()
+        // Must schedule on main RunLoop so the timer fires
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.pollForBuilds()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.buildCheckTimer = timer
         }
     }
 
