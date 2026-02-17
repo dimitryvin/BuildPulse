@@ -6,6 +6,9 @@ actor DerivedDataManager {
         return home.appendingPathComponent("Library/Developer/Xcode/DerivedData")
     }()
 
+    /// Cache: dirName -> (lastModified, sizeBytes)
+    private var sizeCache: [String: (modified: Date, size: Int64)] = [:]
+
     func scan() -> ([DerivedDataProject], Int64) {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(
@@ -18,16 +21,25 @@ actor DerivedDataManager {
 
         var projects: [DerivedDataProject] = []
         var totalSize: Int64 = 0
+        var currentDirNames = Set<String>()
 
         for url in contents {
             guard let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey]),
                   resourceValues.isDirectory == true else { continue }
 
             let dirName = url.lastPathComponent
-            // DerivedData folders are "ProjectName-hashstring"
+            currentDirNames.insert(dirName)
             let projectName = extractProjectName(from: dirName)
-            let size = directorySize(at: url)
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+
+            // Use cached size if modification date hasn't changed
+            let size: Int64
+            if let cached = sizeCache[dirName], cached.modified == modified {
+                size = cached.size
+            } else {
+                size = directorySize(at: url)
+                sizeCache[dirName] = (modified: modified, size: size)
+            }
 
             projects.append(DerivedDataProject(
                 id: dirName,
@@ -39,10 +51,16 @@ actor DerivedDataManager {
             totalSize += size
         }
 
+        // Evict cache entries for deleted projects
+        for key in sizeCache.keys where !currentDirNames.contains(key) {
+            sizeCache.removeValue(forKey: key)
+        }
+
         return (projects.sorted(), totalSize)
     }
 
     func delete(project: DerivedDataProject) {
+        sizeCache.removeValue(forKey: project.id)
         try? FileManager.default.removeItem(at: project.path)
     }
 
@@ -51,6 +69,7 @@ actor DerivedDataManager {
         let (projects, _) = scan()
         var count = 0
         for project in projects where project.lastModified < cutoff {
+            sizeCache.removeValue(forKey: project.id)
             try? FileManager.default.removeItem(at: project.path)
             count += 1
         }
@@ -58,10 +77,8 @@ actor DerivedDataManager {
     }
 
     private func extractProjectName(from dirName: String) -> String {
-        // Format: "ProjectName-abcdefghijklm"
         if let dashRange = dirName.range(of: "-", options: .backwards) {
             let suffix = dirName[dashRange.upperBound...]
-            // Hash is typically 20+ hex-like chars
             if suffix.count >= 12 {
                 return String(dirName[..<dashRange.lowerBound])
             }
@@ -73,15 +90,15 @@ actor DerivedDataManager {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: url,
-            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return 0 }
 
         var size: Int64 = 0
         for case let fileURL as URL in enumerator {
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isDirectoryKey]),
                   resourceValues.isDirectory == false else { continue }
-            size += Int64(resourceValues.fileSize ?? 0)
+            size += Int64(resourceValues.totalFileAllocatedSize ?? 0)
         }
         return size
     }
