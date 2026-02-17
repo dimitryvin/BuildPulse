@@ -453,12 +453,14 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    /// Checks if any compilation processes (swift-frontend, clang, ld, etc.)
+    /// Checks if any compilation processes (swift-frontend, clang, swiftc)
     /// are running with this project's DerivedData directory in their arguments.
+    /// Uses a narrow regex to avoid matching Xcode, SourceKitService, or other
+    /// persistent processes that also reference the DerivedData path.
     private func hasBuildProcesses(forProject dirName: String) -> Bool {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-qf", dirName]
+        task.arguments = ["-qf", "(swift-frontend|clang|swiftc).*\(dirName)"]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         do {
