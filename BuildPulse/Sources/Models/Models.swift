@@ -1,6 +1,8 @@
 import Foundation
 
-struct DerivedDataProject: Identifiable, Comparable {
+// MARK: - DerivedData
+
+struct DerivedDataProject: Identifiable, Comparable, Equatable, Sendable {
     let id: String
     let name: String
     let path: URL
@@ -16,7 +18,9 @@ struct DerivedDataProject: Identifiable, Comparable {
     }
 }
 
-struct BuildRecord: Identifiable, Codable {
+// MARK: - Build Records
+
+struct BuildRecord: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let scheme: String
     let project: String
@@ -24,8 +28,8 @@ struct BuildRecord: Identifiable, Codable {
     let duration: TimeInterval
     let succeeded: Bool
 
-    init(scheme: String, project: String, startTime: Date, duration: TimeInterval, succeeded: Bool) {
-        self.id = UUID()
+    init(id: UUID = UUID(), scheme: String, project: String, startTime: Date, duration: TimeInterval, succeeded: Bool) {
+        self.id = id
         self.scheme = scheme
         self.project = project
         self.startTime = startTime
@@ -43,7 +47,9 @@ struct BuildRecord: Identifiable, Codable {
     }
 }
 
-struct BuildStats {
+// MARK: - Build Stats
+
+struct BuildStats: Equatable, Sendable {
     let totalBuilds: Int
     let avgDuration: TimeInterval
     let totalTime: TimeInterval
@@ -67,7 +73,9 @@ struct BuildStats {
     }
 }
 
-enum TimeRange: String, CaseIterable {
+// MARK: - Enums
+
+enum TimeRange: String, CaseIterable, Equatable, Sendable {
     case today = "Today"
     case week = "This Week"
     case month = "This Month"
@@ -82,4 +90,25 @@ enum TimeRange: String, CaseIterable {
         case .allTime: return .distantPast
         }
     }
+}
+
+enum Tab: String, CaseIterable, Equatable, Sendable {
+    case overview = "Overview"
+    case derivedData = "Derived Data"
+    case builds = "Builds"
+}
+
+// MARK: - Build Events
+
+enum BuildEvent: Equatable, Sendable {
+    case buildStarted(project: String, startTime: Date)
+    case buildFinished(project: String, duration: TimeInterval, succeeded: Bool)
+}
+
+// MARK: - Active Build
+
+struct ActiveBuild: Equatable, Sendable {
+    let project: String
+    let startTime: Date
+    var elapsedSeconds: Int = 0
 }
