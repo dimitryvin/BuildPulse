@@ -229,42 +229,65 @@ final class BuildTrackerCore: @unchecked Sendable {
             let newLogs = currentLogs.subtracting(state.knownLogFiles)
 
             if !newLogs.isEmpty {
-                // New xcactivitylog appeared — build finished!
-                // Find the newest one by modification date
+                // New xcactivitylog appeared — but is the build really done?
+                // Xcode writes small "Prepare build" / "Clean" logs immediately at
+                // the start. We must verify compilation has actually finished.
                 let fm = FileManager.default
                 let newestLogURL = newLogs
                     .compactMap { path -> (URL, Date)? in
                         let url = URL(fileURLWithPath: path)
                         guard let attrs = try? fm.attributesOfItem(atPath: path),
                               let modDate = attrs[.modificationDate] as? Date else { return nil }
-                        // Skip empty files (log still being written)
                         let size = (attrs[.size] as? UInt64) ?? 0
                         guard size > 0 else { return nil }
                         return (url, modDate)
                     }
                     .max(by: { $0.1 < $1.1 })
 
-                if let (logURL, logDate) = newestLogURL {
-                    let duration = max(logDate.timeIntervalSince(state.buildStartTime ?? now), 1)
-                    log.info("[\(state.projectName)] xcactivitylog appeared: \(logURL.lastPathComponent), logDate=\(logDate), duration=\(String(format: "%.1f", duration))s")
-
-                    finishedBuilds.append(FinishedBuild(
-                        projectName: state.projectName,
-                        duration: duration,
-                        projectDir: state.projectDir,
-                        knownLogs: state.knownLogFiles,
-                        newLogURL: logURL
-                    ))
-
-                    state.phase = .idle
-                    state.buildStartTime = nil
-                    state.lastActivityDate = nil
-                    state.knownLogFiles = currentLogs
-                    projectStates[dirName] = state
-                } else {
-                    // New log files exist but are empty (still being written) — keep waiting
+                guard let (logURL, logDate) = newestLogURL else {
                     log.debug("[\(state.projectName)] new log files found but empty, waiting...")
+                    continue
                 }
+
+                // Grace period: don't finish within 3s of build start (processes may
+                // not have spawned yet after the "Prepare build" log).
+                let elapsed = now.timeIntervalSince(state.buildStartTime ?? now)
+                if elapsed < 3 {
+                    log.info("[\(state.projectName)] new log \(logURL.lastPathComponent) but only \(String(format: "%.1f", elapsed))s since start, waiting...")
+                    continue
+                }
+
+                // Check if compilation processes are still running for this project.
+                // Release the lock during the (brief) pgrep call to avoid blocking.
+                lock.unlock()
+                let processesRunning = hasBuildProcesses(forProject: dirName)
+                lock.lock()
+
+                // Re-read state in case it changed while lock was released
+                guard var freshState = projectStates[dirName],
+                      freshState.phase == .building else { continue }
+
+                if processesRunning {
+                    log.info("[\(state.projectName)] new log \(logURL.lastPathComponent) but build processes still running, waiting...")
+                    continue
+                }
+
+                let duration = max(logDate.timeIntervalSince(freshState.buildStartTime ?? now), 1)
+                log.info("[\(freshState.projectName)] xcactivitylog appeared: \(logURL.lastPathComponent), logDate=\(logDate), duration=\(String(format: "%.1f", duration))s")
+
+                finishedBuilds.append(FinishedBuild(
+                    projectName: freshState.projectName,
+                    duration: duration,
+                    projectDir: freshState.projectDir,
+                    knownLogs: freshState.knownLogFiles,
+                    newLogURL: logURL
+                ))
+
+                freshState.phase = .idle
+                freshState.buildStartTime = nil
+                freshState.lastActivityDate = nil
+                freshState.knownLogFiles = currentLogs
+                projectStates[dirName] = freshState
                 continue
             }
 
@@ -413,6 +436,23 @@ final class BuildTrackerCore: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Checks if any compilation processes (swift-frontend, clang, ld, etc.)
+    /// are running with this project's DerivedData directory in their arguments.
+    private func hasBuildProcesses(forProject dirName: String) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-qf", dirName]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            return task.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
 
     /// Returns the latest modification date across build.db and its journal/WAL/SHM files.
     private func latestBuildDBModDate(at buildDBPath: String) -> Date? {
