@@ -37,6 +37,9 @@ final class BuildTrackerCore: @unchecked Sendable {
         var buildStartTime: Date?
         var lastActivityDate: Date?
         var knownLogFiles: Set<String>
+        /// When we first saw "new log + no compiler processes". Must stay
+        /// consistent for `processQuietPeriod` before we declare finished.
+        var processesGoneSince: Date?
 
         enum Phase: CustomStringConvertible {
             case idle, building
@@ -58,6 +61,9 @@ final class BuildTrackerCore: @unchecked Sendable {
 
     /// How long to wait with no activity before declaring a canceled build.
     private static let cancelTimeout: TimeInterval = 30.0
+    /// How long compiler processes must be absent before we trust the result.
+    /// Bridges gaps between Xcode build phases (prepare → compile → link).
+    private static let processQuietPeriod: TimeInterval = 5.0
 
     func startMonitoring() {
         log.info("Starting build monitoring at \(self.derivedDataPath)")
@@ -161,6 +167,7 @@ final class BuildTrackerCore: @unchecked Sendable {
                     case .idle:
                         state.phase = .building
                         state.buildStartTime = now
+                        state.processesGoneSince = nil
                         state.knownLogFiles = snapshotLogFiles(in: dir)
                         projectStates[dirName] = state
                         startedProjects.append(state.projectName)
@@ -249,16 +256,7 @@ final class BuildTrackerCore: @unchecked Sendable {
                     continue
                 }
 
-                // Grace period: don't finish within 3s of build start (processes may
-                // not have spawned yet after the "Prepare build" log).
-                let elapsed = now.timeIntervalSince(state.buildStartTime ?? now)
-                if elapsed < 3 {
-                    log.info("[\(state.projectName)] new log \(logURL.lastPathComponent) but only \(String(format: "%.1f", elapsed))s since start, waiting...")
-                    continue
-                }
-
-                // Check if compilation processes are still running for this project.
-                // Release the lock during the (brief) pgrep call to avoid blocking.
+                // Check if compilation processes are still running.
                 lock.unlock()
                 let processesRunning = hasBuildProcesses(forProject: dirName)
                 lock.lock()
@@ -268,12 +266,30 @@ final class BuildTrackerCore: @unchecked Sendable {
                       freshState.phase == .building else { continue }
 
                 if processesRunning {
-                    log.info("[\(state.projectName)] new log \(logURL.lastPathComponent) but build processes still running, waiting...")
+                    // Processes running — reset the quiet period tracker
+                    freshState.processesGoneSince = nil
+                    projectStates[dirName] = freshState
+                    log.info("[\(freshState.projectName)] new log \(logURL.lastPathComponent) but build processes still running, waiting...")
                     continue
                 }
 
+                // No processes — start or continue the quiet period
+                if freshState.processesGoneSince == nil {
+                    freshState.processesGoneSince = now
+                    projectStates[dirName] = freshState
+                    log.info("[\(freshState.projectName)] new log \(logURL.lastPathComponent), no processes — starting \(Self.processQuietPeriod)s quiet period")
+                    continue
+                }
+
+                let quietTime = now.timeIntervalSince(freshState.processesGoneSince!)
+                if quietTime < Self.processQuietPeriod {
+                    log.debug("[\(freshState.projectName)] quiet for \(String(format: "%.1f", quietTime))s of \(Self.processQuietPeriod)s needed...")
+                    continue
+                }
+
+                // Quiet period elapsed — build is truly done
                 let duration = max(logDate.timeIntervalSince(freshState.buildStartTime ?? now), 1)
-                log.info("[\(freshState.projectName)] xcactivitylog appeared: \(logURL.lastPathComponent), logDate=\(logDate), duration=\(String(format: "%.1f", duration))s")
+                log.info("[\(freshState.projectName)] xcactivitylog confirmed after \(Self.processQuietPeriod)s quiet: \(logURL.lastPathComponent), duration=\(String(format: "%.1f", duration))s")
 
                 finishedBuilds.append(FinishedBuild(
                     projectName: freshState.projectName,
@@ -286,6 +302,7 @@ final class BuildTrackerCore: @unchecked Sendable {
                 freshState.phase = .idle
                 freshState.buildStartTime = nil
                 freshState.lastActivityDate = nil
+                freshState.processesGoneSince = nil
                 freshState.knownLogFiles = currentLogs
                 projectStates[dirName] = freshState
                 continue
