@@ -2,10 +2,21 @@ import ComposableArchitecture
 import SwiftUI
 
 struct DerivedDataTabView: View {
-    @Bindable var store: StoreOf<AppFeature>
+    let store: StoreOf<AppFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Inline delete confirmation banner
+            if let confirmation = store.confirmingDelete {
+                DeleteConfirmationBanner(
+                    confirmation: confirmation,
+                    projects: store.derivedDataProjects,
+                    selectionCount: store.derivedDataSelection.count,
+                    onConfirm: { store.send(.confirmDelete) },
+                    onCancel: { store.send(.cancelDelete) }
+                )
+            }
+
             // Header with total + actions
             HStack {
                 VStack(alignment: .leading) {
@@ -29,12 +40,13 @@ struct DerivedDataTabView: View {
                         store.send(.deleteOlderThan(days: 30))
                     }
                     Divider()
-                    Button("Delete All", role: .destructive) {
+                    Button("Delete All") {
                         store.send(.deleteAllTapped)
                     }
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .disabled(store.confirmingDelete != nil)
             }
 
             // Sort picker
@@ -62,12 +74,58 @@ struct DerivedDataTabView: View {
                     onToggle: { store.send(.toggleProjectSelection(project.id)) },
                     onDelete: { store.send(.deleteProjectTapped(project)) }
                 )
+                .disabled(store.confirmingDelete != nil)
             }
         }
         .padding(16)
-        .alert($store.scope(state: \.alert, action: \.alert))
     }
 }
+
+// MARK: - Inline Confirmation Banner
+
+struct DeleteConfirmationBanner: View {
+    let confirmation: AppFeature.DeleteConfirmation
+    let projects: [DerivedDataProject]
+    let selectionCount: Int
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var message: String {
+        switch confirmation {
+        case let .project(project):
+            return "Delete \(project.name) (\(project.sizeFormatted))?"
+        case .selected:
+            return "Delete \(selectionCount) selected projects?"
+        case .all:
+            return "Delete all \(projects.count) projects?"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(message)
+                .font(.callout.bold())
+            Text("Xcode will rebuild on next build.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button("Cancel") { onCancel() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                Button("Delete") { onConfirm() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .font(.caption)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(10)
+        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.red.opacity(0.3), lineWidth: 1))
+    }
+}
+
+// MARK: - Components
 
 struct ProjectRow: View {
     let project: DerivedDataProject

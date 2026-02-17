@@ -24,6 +24,9 @@ struct AppFeature {
         var derivedDataSortOrder: SortOrder = .size
         var derivedDataSelection: Set<String> = []
 
+        // Inline delete confirmation (no system alert, stays in popover)
+        var confirmingDelete: DeleteConfirmation? = nil
+
         // Internal tracking
         var hasAppeared = false
         var hasRunAutoCleanup = false
@@ -35,9 +38,6 @@ struct AppFeature {
         @Shared(.appStorage("launchAtLogin")) var launchAtLogin = false
         @Shared(.appStorage("showSizeInMenuBar")) var showSizeInMenuBar = true
         @Shared(.appStorage("notifyOnBuildComplete")) var notifyOnBuildComplete = false
-
-        // Presentation
-        @Presents var alert: AlertState<Action.Alert>?
 
         // Computed
         var menuBarTitle: String {
@@ -75,6 +75,12 @@ struct AppFeature {
                 return derivedDataProjects.sorted { $0.lastModified > $1.lastModified }
             }
         }
+    }
+
+    enum DeleteConfirmation: Equatable, Sendable {
+        case project(DerivedDataProject)
+        case selected
+        case all
     }
 
     enum SortOrder: String, CaseIterable, Equatable, Sendable {
@@ -119,18 +125,12 @@ struct AppFeature {
         case deleteAllTapped
         case projectsDeleted
 
-        // Alert
-        case alert(PresentationAction<Alert>)
+        // Inline confirmation
+        case confirmDelete
+        case cancelDelete
 
         // Settings
         case quitButtonTapped
-
-        @CasePathable
-        enum Alert: Equatable {
-            case confirmDeleteProject(DerivedDataProject)
-            case confirmDeleteSelected
-            case confirmDeleteAll
-        }
     }
 
     // MARK: - Dependencies
@@ -271,7 +271,7 @@ struct AppFeature {
                 let threshold = state.alertThresholdGB
                 let shouldAlert: Bool
                 if let lastAlert = state.lastThresholdAlertDate {
-                    shouldAlert = Date().timeIntervalSince(lastAlert) > 86400 // 24 hours
+                    shouldAlert = Date().timeIntervalSince(lastAlert) > 86400
                 } else {
                     shouldAlert = true
                 }
@@ -332,30 +332,11 @@ struct AppFeature {
                 return .none
 
             case let .deleteProjectTapped(project):
-                state.alert = AlertState {
-                    TextState("Delete Derived Data?")
-                } actions: {
-                    ButtonState(role: .cancel) { TextState("Cancel") }
-                    ButtonState(role: .destructive, action: .confirmDeleteProject(project)) {
-                        TextState("Delete")
-                    }
-                } message: {
-                    TextState("Remove \(project.name) (\(project.sizeFormatted))? Xcode will rebuild on next build.")
-                }
+                state.confirmingDelete = .project(project)
                 return .none
 
             case .deleteSelectedTapped:
-                let count = state.derivedDataSelection.count
-                state.alert = AlertState {
-                    TextState("Delete Derived Data?")
-                } actions: {
-                    ButtonState(role: .cancel) { TextState("Cancel") }
-                    ButtonState(role: .destructive, action: .confirmDeleteSelected) {
-                        TextState("Delete")
-                    }
-                } message: {
-                    TextState("Remove \(count) projects? Xcode will rebuild them on next build.")
-                }
+                state.confirmingDelete = .selected
                 return .none
 
             case let .deleteOlderThan(days):
@@ -365,50 +346,47 @@ struct AppFeature {
                 }
 
             case .deleteAllTapped:
-                state.alert = AlertState {
-                    TextState("Delete All Derived Data?")
-                } actions: {
-                    ButtonState(role: .cancel) { TextState("Cancel") }
-                    ButtonState(role: .destructive, action: .confirmDeleteAll) {
-                        TextState("Delete")
-                    }
-                } message: {
-                    TextState("Remove all projects? Xcode will rebuild everything on next build.")
-                }
+                state.confirmingDelete = .all
                 return .none
 
             case .projectsDeleted:
                 state.derivedDataSelection.removeAll()
+                state.confirmingDelete = nil
                 return .send(.refreshDerivedData)
 
-            // MARK: Alert
+            // MARK: Inline Confirmation
 
-            case let .alert(.presented(.confirmDeleteProject(project))):
-                return .run { send in
-                    await derivedDataClient.delete(project)
-                    await send(.projectsDeleted)
-                }
+            case .confirmDelete:
+                guard let confirmation = state.confirmingDelete else { return .none }
+                state.confirmingDelete = nil
 
-            case .alert(.presented(.confirmDeleteSelected)):
-                let selectedIDs = state.derivedDataSelection
-                let toDelete = state.derivedDataProjects.filter { selectedIDs.contains($0.id) }
-                return .run { send in
-                    for project in toDelete {
+                switch confirmation {
+                case let .project(project):
+                    return .run { send in
                         await derivedDataClient.delete(project)
+                        await send(.projectsDeleted)
                     }
-                    await send(.projectsDeleted)
+                case .selected:
+                    let selectedIDs = state.derivedDataSelection
+                    let toDelete = state.derivedDataProjects.filter { selectedIDs.contains($0.id) }
+                    return .run { send in
+                        for project in toDelete {
+                            await derivedDataClient.delete(project)
+                        }
+                        await send(.projectsDeleted)
+                    }
+                case .all:
+                    let all = state.derivedDataProjects
+                    return .run { send in
+                        for project in all {
+                            await derivedDataClient.delete(project)
+                        }
+                        await send(.projectsDeleted)
+                    }
                 }
 
-            case .alert(.presented(.confirmDeleteAll)):
-                let all = state.derivedDataProjects
-                return .run { send in
-                    for project in all {
-                        await derivedDataClient.delete(project)
-                    }
-                    await send(.projectsDeleted)
-                }
-
-            case .alert(.dismiss):
+            case .cancelDelete:
+                state.confirmingDelete = nil
                 return .none
 
             // MARK: Settings
@@ -418,7 +396,6 @@ struct AppFeature {
                 return .none
             }
         }
-        .ifLet(\.$alert, action: \.alert)
     }
 }
 
