@@ -44,10 +44,18 @@ struct AppFeature {
             if let build = activeBuild {
                 return "\(build.elapsedSeconds)s"
             }
-            if showSizeInMenuBar && totalDerivedDataSize > 0 {
-                return ByteCountFormatter.string(fromByteCount: totalDerivedDataSize, countStyle: .file)
+            let todayTotal = todayBuildTime
+            if todayTotal > 0 {
+                return BuildRecord.formatDuration(todayTotal)
             }
             return ""
+        }
+
+        var todayBuildTime: TimeInterval {
+            let startOfDay = Calendar.current.startOfDay(for: Date())
+            return buildRecords
+                .filter { $0.startTime >= startOfDay }
+                .reduce(0) { $0 + $1.duration }
         }
 
         func statsFor(range: TimeRange) -> BuildStats {
