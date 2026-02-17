@@ -36,6 +36,19 @@ struct MenuBarView: View {
 
             Divider()
 
+            // Pinned delete confirmation (above scroll so always visible)
+            if let confirmation = store.confirmingDelete {
+                DeleteConfirmationBanner(
+                    confirmation: confirmation,
+                    projects: store.derivedDataProjects,
+                    selectionCount: store.derivedDataSelection.count,
+                    onConfirm: { store.send(.confirmDelete) },
+                    onCancel: { store.send(.cancelDelete) }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+
             // Content
             ScrollView {
                 switch store.selectedTab {

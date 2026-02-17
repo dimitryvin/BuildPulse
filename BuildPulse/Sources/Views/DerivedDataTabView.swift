@@ -6,17 +6,6 @@ struct DerivedDataTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Inline delete confirmation banner
-            if let confirmation = store.confirmingDelete {
-                DeleteConfirmationBanner(
-                    confirmation: confirmation,
-                    projects: store.derivedDataProjects,
-                    selectionCount: store.derivedDataSelection.count,
-                    onConfirm: { store.send(.confirmDelete) },
-                    onCancel: { store.send(.cancelDelete) }
-                )
-            }
-
             // Header with total + actions
             HStack {
                 VStack(alignment: .leading) {

@@ -374,29 +374,30 @@ struct AppFeature {
                 guard let confirmation = state.confirmingDelete else { return .none }
                 state.confirmingDelete = nil
 
+                // Optimistically remove from state immediately
+                var projectsToDelete: [DerivedDataProject] = []
                 switch confirmation {
                 case let .project(project):
-                    return .run { send in
-                        await derivedDataClient.delete(project)
-                        await send(.projectsDeleted)
-                    }
+                    projectsToDelete = [project]
                 case .selected:
                     let selectedIDs = state.derivedDataSelection
-                    let toDelete = state.derivedDataProjects.filter { selectedIDs.contains($0.id) }
-                    return .run { send in
-                        for project in toDelete {
-                            await derivedDataClient.delete(project)
-                        }
-                        await send(.projectsDeleted)
-                    }
+                    projectsToDelete = state.derivedDataProjects.filter { selectedIDs.contains($0.id) }
                 case .all:
-                    let all = state.derivedDataProjects
-                    return .run { send in
-                        for project in all {
-                            await derivedDataClient.delete(project)
-                        }
-                        await send(.projectsDeleted)
+                    projectsToDelete = state.derivedDataProjects
+                }
+
+                let deletedIDs = Set(projectsToDelete.map(\.id))
+                let deletedSize = projectsToDelete.reduce(Int64(0)) { $0 + $1.sizeBytes }
+                state.derivedDataProjects.removeAll { deletedIDs.contains($0.id) }
+                state.totalDerivedDataSize = max(0, state.totalDerivedDataSize - deletedSize)
+                state.derivedDataSelection.subtract(deletedIDs)
+
+                let toDelete = projectsToDelete
+                return .run { send in
+                    for project in toDelete {
+                        await derivedDataClient.delete(project)
                     }
+                    await send(.projectsDeleted)
                 }
 
             case .cancelDelete:
