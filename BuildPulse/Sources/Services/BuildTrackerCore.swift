@@ -301,25 +301,41 @@ final class BuildTrackerCore: @unchecked Sendable {
                 continue
             }
 
-            // Fallback: cancel timeout
+            // Fallback: cancel timeout — but only if build processes have stopped
             let lastActivity = state.lastActivityDate ?? state.buildStartTime ?? now
             let inactiveTime = now.timeIntervalSince(lastActivity)
             if inactiveTime >= Self.cancelTimeout {
-                let duration = max(now.timeIntervalSince(state.buildStartTime ?? now), 1)
-                log.info("[\(state.projectName)] CANCEL TIMEOUT — no xcactivitylog and no activity for \(String(format: "%.0f", inactiveTime))s")
+                // Check if build processes are still running before timing out
+                lock.unlock()
+                let processesRunning = hasBuildProcesses(forProject: dirName)
+                lock.lock()
+
+                guard var freshState = projectStates[dirName],
+                      freshState.phase == .building else { continue }
+
+                if processesRunning {
+                    // Processes still running — build is active, extend timeout
+                    freshState.lastActivityDate = now
+                    projectStates[dirName] = freshState
+                    log.info("[\(freshState.projectName)] cancel timeout reached but build processes still running (\(String(format: "%.0f", inactiveTime))s), extending...")
+                    continue
+                }
+
+                let duration = max(now.timeIntervalSince(freshState.buildStartTime ?? now), 1)
+                log.info("[\(freshState.projectName)] CANCEL TIMEOUT — no xcactivitylog, no processes, no activity for \(String(format: "%.0f", inactiveTime))s")
 
                 finishedBuilds.append(FinishedBuild(
-                    projectName: state.projectName,
+                    projectName: freshState.projectName,
                     duration: duration,
-                    projectDir: state.projectDir,
-                    knownLogs: state.knownLogFiles,
+                    projectDir: freshState.projectDir,
+                    knownLogs: freshState.knownLogFiles,
                     newLogURL: nil
                 ))
 
-                state.phase = .idle
-                state.buildStartTime = nil
-                state.lastActivityDate = nil
-                projectStates[dirName] = state
+                freshState.phase = .idle
+                freshState.buildStartTime = nil
+                freshState.lastActivityDate = nil
+                projectStates[dirName] = freshState
             }
         }
 
