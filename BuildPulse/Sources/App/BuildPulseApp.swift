@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import SwiftUI
+import UserNotifications
 
 @main
 struct BuildPulseApp: App {
@@ -10,7 +11,7 @@ struct BuildPulseApp: App {
         MenuBarExtra {
             MenuBarView(store: store)
         } label: {
-            Label(store.menuBarTitle, systemImage: "hammer.fill")
+            MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.window)
 
@@ -20,11 +21,23 @@ struct BuildPulseApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request notification permissions
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+/// Separate view for the menu bar label to ensure reactive updates.
+/// MenuBarExtra label closures may not re-evaluate with computed properties alone.
+struct MenuBarLabel: View {
+    let store: StoreOf<AppFeature>
+
+    var body: some View {
+        let title = store.menuBarTitle
+        if title.isEmpty {
+            Label("BuildPulse", systemImage: "hammer.fill")
+        } else {
+            Label(title, systemImage: store.activeBuild != nil ? "hammer.fill" : "hammer.fill")
+        }
     }
 }
 
-import UserNotifications
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+}
