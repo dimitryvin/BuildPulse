@@ -7,13 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		08CE11EAEAF6ADBAD2C18547 /* BuildMonitorClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97904342EF18005AEC7ABF73 /* BuildMonitorClient.swift */; };
 		0BB705B93443457AD133C1C7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D280BE5DC2012AE67F366F54 /* SettingsView.swift */; };
+		17946B3BBE572E94CA5FEEA9 /* BuildHistoryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10A6323E02B65B560F4ABD6 /* BuildHistoryClient.swift */; };
 		2EA2F3D1FA5CFCCC13AC423A /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C0E714AAEF11D61BF5174 /* MenuBarView.swift */; };
 		5149203B6B2A6BFD9E75DBF3 /* DerivedDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DBEF884E25AE39DD2D47B6D /* DerivedDataManager.swift */; };
+		5A83D84B2FADDA4C6241C27F /* BuildTrackerCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21230E56D90DD0C14D7241CB /* BuildTrackerCore.swift */; };
 		72B6F43EBCFC7544FEE43C26 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67532C8EE7304FFC3593FED6 /* Models.swift */; };
 		8583F4DF86FF7CDF98A6390F /* BuildPulseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C19BD0DD13E522B02254D14 /* BuildPulseApp.swift */; };
+		996F78A015D81BB993CAC385 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = D60ABA0EEB805A6C92DBF00D /* ComposableArchitecture */; };
 		ACEAAE3713DDA4AC5F85F123 /* BuildsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79182A99420D3D92FE270E73 /* BuildsTabView.swift */; };
-		CB1EA6BF38085E1E8E8EF9D8 /* BuildTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE9D066BC0227BB4B1461CAC /* BuildTracker.swift */; };
+		BBC82653E358AA3832545333 /* DerivedDataClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D60E547E2130EEE7C0C5540D /* DerivedDataClient.swift */; };
 		D3EE40B59542E7CA4C6DB24A /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08484A8F223B87292C6808EC /* AppState.swift */; };
 		E2A067A72223F3BB23CEF550 /* BuildHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419B155A5F6B4AB5FC263A97 /* BuildHistoryStore.swift */; };
 		E601094A81A9788E95497791 /* OverviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB49F500BA2172DF422862C /* OverviewTabView.swift */; };
@@ -23,6 +27,7 @@
 /* Begin PBXFileReference section */
 		08484A8F223B87292C6808EC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		0BB49F500BA2172DF422862C /* OverviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewTabView.swift; sourceTree = "<group>"; };
+		21230E56D90DD0C14D7241CB /* BuildTrackerCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildTrackerCore.swift; sourceTree = "<group>"; };
 		233EC148D2F8AA5BCA8370F3 /* DerivedDataTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivedDataTabView.swift; sourceTree = "<group>"; };
 		3C6C0E714AAEF11D61BF5174 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		419B155A5F6B4AB5FC263A97 /* BuildHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildHistoryStore.swift; sourceTree = "<group>"; };
@@ -31,15 +36,29 @@
 		6C19BD0DD13E522B02254D14 /* BuildPulseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildPulseApp.swift; sourceTree = "<group>"; };
 		6DBEF884E25AE39DD2D47B6D /* DerivedDataManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivedDataManager.swift; sourceTree = "<group>"; };
 		79182A99420D3D92FE270E73 /* BuildsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildsTabView.swift; sourceTree = "<group>"; };
-		AE9D066BC0227BB4B1461CAC /* BuildTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildTracker.swift; sourceTree = "<group>"; };
+		97904342EF18005AEC7ABF73 /* BuildMonitorClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildMonitorClient.swift; sourceTree = "<group>"; };
+		B10A6323E02B65B560F4ABD6 /* BuildHistoryClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildHistoryClient.swift; sourceTree = "<group>"; };
 		D280BE5DC2012AE67F366F54 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D60E547E2130EEE7C0C5540D /* DerivedDataClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivedDataClient.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		309B671810553546635FBB83 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				996F78A015D81BB993CAC385 /* ComposableArchitecture in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		5BC70A3D812578B0BE1D1B18 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				B3DE46C44334D1881166458A /* App */,
+				D718118E28FF840E55C51E0A /* Clients */,
 				78ED3B9C224FD7D560DAAE82 /* Models */,
 				957BC8665B2C69B75DE7FF3C /* Services */,
 				E961118B27371D9FCF8E75BD /* Views */,
@@ -69,7 +88,7 @@
 			isa = PBXGroup;
 			children = (
 				419B155A5F6B4AB5FC263A97 /* BuildHistoryStore.swift */,
-				AE9D066BC0227BB4B1461CAC /* BuildTracker.swift */,
+				21230E56D90DD0C14D7241CB /* BuildTrackerCore.swift */,
 				6DBEF884E25AE39DD2D47B6D /* DerivedDataManager.swift */,
 			);
 			path = Services;
@@ -89,6 +108,16 @@
 				6C19BD0DD13E522B02254D14 /* BuildPulseApp.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		D718118E28FF840E55C51E0A /* Clients */ = {
+			isa = PBXGroup;
+			children = (
+				B10A6323E02B65B560F4ABD6 /* BuildHistoryClient.swift */,
+				97904342EF18005AEC7ABF73 /* BuildMonitorClient.swift */,
+				D60E547E2130EEE7C0C5540D /* DerivedDataClient.swift */,
+			);
+			path = Clients;
 			sourceTree = "<group>";
 		};
 		E961118B27371D9FCF8E75BD /* Views */ = {
@@ -111,6 +140,7 @@
 			buildConfigurationList = 2ADC25A296A0A3FDF1AA3C52 /* Build configuration list for PBXNativeTarget "BuildPulse" */;
 			buildPhases = (
 				CD26A72124DF348B10D22831 /* Sources */,
+				309B671810553546635FBB83 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -118,6 +148,7 @@
 			);
 			name = BuildPulse;
 			packageProductDependencies = (
+				D60ABA0EEB805A6C92DBF00D /* ComposableArchitecture */,
 			);
 			productName = BuildPulse;
 			productReference = 66B0D8647DEB483399B80692 /* BuildPulse.app */;
@@ -142,6 +173,9 @@
 			);
 			mainGroup = 87F858A78CBF00A425D60317;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				51FDD24C64E045E70DAEA74B /* XCRemoteSwiftPackageReference "swift-composable-architecture" */,
+			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
@@ -157,10 +191,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				D3EE40B59542E7CA4C6DB24A /* AppState.swift in Sources */,
+				17946B3BBE572E94CA5FEEA9 /* BuildHistoryClient.swift in Sources */,
 				E2A067A72223F3BB23CEF550 /* BuildHistoryStore.swift in Sources */,
+				08CE11EAEAF6ADBAD2C18547 /* BuildMonitorClient.swift in Sources */,
 				8583F4DF86FF7CDF98A6390F /* BuildPulseApp.swift in Sources */,
-				CB1EA6BF38085E1E8E8EF9D8 /* BuildTracker.swift in Sources */,
+				5A83D84B2FADDA4C6241C27F /* BuildTrackerCore.swift in Sources */,
 				ACEAAE3713DDA4AC5F85F123 /* BuildsTabView.swift in Sources */,
+				BBC82653E358AA3832545333 /* DerivedDataClient.swift in Sources */,
 				5149203B6B2A6BFD9E75DBF3 /* DerivedDataManager.swift in Sources */,
 				F9953C40249CF7D105ABD6E2 /* DerivedDataTabView.swift in Sources */,
 				2EA2F3D1FA5CFCCC13AC423A /* MenuBarView.swift in Sources */,
@@ -348,6 +385,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		51FDD24C64E045E70DAEA74B /* XCRemoteSwiftPackageReference "swift-composable-architecture" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pointfreeco/swift-composable-architecture";
+			requirement = {
+				kind = exactVersion;
+				version = 1.23.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D60ABA0EEB805A6C92DBF00D /* ComposableArchitecture */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 51FDD24C64E045E70DAEA74B /* XCRemoteSwiftPackageReference "swift-composable-architecture" */;
+			productName = ComposableArchitecture;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7E4EA105A4017DC39681ED13 /* Project object */;
 }

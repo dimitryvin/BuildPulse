@@ -25,7 +25,7 @@ struct MenuBarView: View {
 
             // Tab picker
             Picker("", selection: $appState.selectedTab) {
-                ForEach(AppState.Tab.allCases, id: \.self) { tab in
+                ForEach(Tab.allCases, id: \.self) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
             }

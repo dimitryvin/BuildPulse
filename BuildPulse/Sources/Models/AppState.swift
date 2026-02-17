@@ -7,30 +7,18 @@ final class AppState: ObservableObject {
     @Published var totalDerivedDataSize: Int64 = 0
     @Published var buildRecords: [BuildRecord] = []
     @Published var isScanning = false
-    @Published var activeBuild: ActiveBuild?
+    @Published var activeBuild: ActiveBuild? = nil
     @Published var selectedTab: Tab = .overview
 
     let derivedDataManager = DerivedDataManager()
-    let buildTracker = BuildTracker()
+    let buildTracker = BuildTrackerCore()
     let buildStore = BuildHistoryStore()
 
     private var cancellables = Set<AnyCancellable>()
 
-    enum Tab: String, CaseIterable {
-        case overview = "Overview"
-        case derivedData = "Derived Data"
-        case builds = "Builds"
-    }
-
-    struct ActiveBuild {
-        let project: String
-        let startTime: Date
-        var elapsed: TimeInterval { Date().timeIntervalSince(startTime) }
-    }
-
     var menuBarTitle: String {
         if let build = activeBuild {
-            let secs = Int(build.elapsed)
+            let secs = build.elapsedSeconds
             return "\(secs)s"
         }
         let size = ByteCountFormatter.string(fromByteCount: totalDerivedDataSize, countStyle: .file)

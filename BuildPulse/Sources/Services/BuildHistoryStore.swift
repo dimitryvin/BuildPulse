@@ -1,6 +1,6 @@
 import Foundation
 
-final class BuildHistoryStore {
+final class BuildHistoryStore: Sendable {
     private let fileURL: URL = {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("BuildPulse")
@@ -17,7 +17,6 @@ final class BuildHistoryStore {
     }
 
     func save(_ records: [BuildRecord]) {
-        // Keep last 1000 records
         let trimmed = Array(records.prefix(1000))
         guard let data = try? JSONEncoder().encode(trimmed) else { return }
         try? data.write(to: fileURL, options: .atomic)

@@ -1,23 +1,19 @@
 import Foundation
 import CoreServices
 
-final class BuildTracker {
-    var onBuildStarted: ((String) -> Void)?
-    var onBuildFinished: ((String, TimeInterval, Bool) -> Void)?
+final class BuildTrackerCore: @unchecked Sendable {
+    var onBuildStarted: (@Sendable (String) -> Void)?
+    var onBuildFinished: (@Sendable (String, TimeInterval, Bool) -> Void)?
 
     private var eventStream: FSEventStreamRef?
     private var activeBuildProject: String?
     private var buildStartTime: Date?
     private var buildCheckTimer: Timer?
+    private let lock = NSLock()
 
     private let derivedDataPath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Developer/Xcode/DerivedData"
-    }()
-
-    private let logPath: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Developer/Xcode/DerivedData/Logs"
     }()
 
     func startMonitoring() {
@@ -33,12 +29,12 @@ final class BuildTracker {
             eventStream = nil
         }
         buildCheckTimer?.invalidate()
+        buildCheckTimer = nil
     }
 
     // MARK: - Xcode Build Log Polling
 
     private func startXcodeBuildPolling() {
-        // Poll for active xcodebuild processes
         buildCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.checkForActiveBuilds()
         }
@@ -60,26 +56,27 @@ final class BuildTracker {
         let isBuilding = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && output.contains("xcodebuild")
 
+        lock.lock()
         if isBuilding && activeBuildProject == nil {
-            // Build started
             let project = extractProjectFromProcessList(output)
             activeBuildProject = project
             buildStartTime = Date()
+            lock.unlock()
             onBuildStarted?(project)
         } else if !isBuilding && activeBuildProject != nil {
-            // Build finished
             let duration = Date().timeIntervalSince(buildStartTime ?? Date())
             let project = activeBuildProject ?? "Unknown"
             activeBuildProject = nil
             buildStartTime = nil
-            // Check build result from recent log
+            lock.unlock()
             let succeeded = checkLastBuildResult(project: project)
             onBuildFinished?(project, duration, succeeded)
+        } else {
+            lock.unlock()
         }
     }
 
     private func extractProjectFromProcessList(_ output: String) -> String {
-        // Try to find project name from xcodebuild args
         let lines = output.components(separatedBy: "\n")
         for line in lines {
             if let range = line.range(of: "-project ") {
@@ -97,8 +94,7 @@ final class BuildTracker {
         return "Xcode Build"
     }
 
-    private func checkLastBuildResult(project: String) -> Bool {
-        // Check the Xcode build result from the most recent log
+    func checkLastBuildResult(project: String) -> Bool {
         let fm = FileManager.default
         let ddPath = URL(fileURLWithPath: derivedDataPath)
 
@@ -108,7 +104,6 @@ final class BuildTracker {
             options: .skipsHiddenFiles
         ) else { return true }
 
-        // Find the most recently modified project folder
         let sorted = contents
             .compactMap { url -> (URL, Date)? in
                 guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
@@ -120,16 +115,57 @@ final class BuildTracker {
         guard let mostRecent = sorted.first else { return true }
 
         let logsDir = mostRecent.0.appendingPathComponent("Logs/Build")
-        guard let logFiles = try? fm.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil) else {
+        guard let logFiles = try? fm.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: [.contentModificationDateKey]) else {
             return true
         }
 
-        // Look for .xcactivitylog files
-        let activityLogs = logFiles.filter { $0.pathExtension == "xcactivitylog" }
-            .sorted { ($0.lastPathComponent) > ($1.lastPathComponent) }
+        // Find most recent .xcactivitylog
+        let activityLogs = logFiles
+            .filter { $0.pathExtension == "xcactivitylog" }
+            .compactMap { url -> (URL, Date)? in
+                guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                      let date = values.contentModificationDate else { return nil }
+                return (url, date)
+            }
+            .sorted { $0.1 > $1.1 }
 
-        // If recent log exists, assume success (detailed parsing would need gzip decompression)
-        return !activityLogs.isEmpty
+        guard let latestLog = activityLogs.first else { return true }
+
+        // Decompress and check for Build Failed/Succeeded
+        let gunzipProcess = Process()
+        gunzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
+        gunzipProcess.arguments = ["-c", latestLog.0.path]
+        let outPipe = Pipe()
+        gunzipProcess.standardOutput = outPipe
+        gunzipProcess.standardError = Pipe()
+
+        do {
+            try gunzipProcess.run()
+            gunzipProcess.waitUntilExit()
+
+            let outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            // Only check the last ~4KB for performance
+            let tailSize = min(outputData.count, 4096)
+            let tailData = outputData.suffix(tailSize)
+            if let tail = String(data: tailData, encoding: .utf8) {
+                if tail.contains("Build Failed") {
+                    return false
+                }
+                if tail.contains("Build Succeeded") {
+                    return true
+                }
+            }
+            // Fallback: also check with latin1 encoding
+            if let tail = String(data: tailData, encoding: .isoLatin1) {
+                if tail.contains("Build Failed") {
+                    return false
+                }
+            }
+        } catch {
+            // If decompression fails, assume success
+        }
+
+        return true
     }
 
     // MARK: - FSEvents
@@ -141,7 +177,6 @@ final class BuildTracker {
 
         let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
             // FSEvents callback - primarily used to trigger UI refresh
-            // Build detection is handled by process polling above
         }
 
         guard let stream = FSEventStreamCreate(

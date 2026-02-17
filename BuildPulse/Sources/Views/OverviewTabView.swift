@@ -93,7 +93,7 @@ struct OverviewTabView: View {
 }
 
 struct ActiveBuildBanner: View {
-    let build: AppState.ActiveBuild
+    let build: ActiveBuild
     @State private var elapsed: TimeInterval = 0
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
